@@ -24,7 +24,12 @@
 
   inputs = {
     aleph.url = "github:elodin-sys/elodin?rev=80f226daf08f9fb9819adbe2e711e8eec2f83543&dir=aleph";
-    elodin.url = "github:elodin-sys/elodin?rev=80f226daf08f9fb9819adbe2e711e8eec2f83543";
+    elodin = {
+      url = "github:elodin-sys/elodin?rev=80f226daf08f9fb9819adbe2e711e8eec2f83543";
+      inputs.nixpkgs.follows = "nixpkgs";
+      inputs.rust-overlay.follows = "aleph/rust-overlay";
+      inputs.flake-utils.follows = "flake-utils";
+    };
     flake-utils.follows = "aleph/flake-utils";
     nixpkgs.follows = "aleph/nixpkgs";
 
