@@ -24,6 +24,7 @@
 
   inputs = {
     aleph.url = "github:elodin-sys/elodin?rev=80f226daf08f9fb9819adbe2e711e8eec2f83543&dir=aleph";
+    elodin.url = "github:elodin-sys/elodin?rev=80f226daf08f9fb9819adbe2e711e8eec2f83543";
     flake-utils.follows = "aleph/flake-utils";
     nixpkgs.follows = "aleph/nixpkgs";
 
@@ -39,10 +40,59 @@
   outputs = {
     nixpkgs,
     aleph,
+    elodin,
     ardupilot-src,
+    flake-utils,
     self,
     ...
-  }: rec {
+  }:
+  ###########################################################################
+  # Ground Station DevShell (runs on the developer's machine)
+  #
+  # Provides Elodin Editor/CLI, Elodin-DB, Elodin Python wheel, and
+  # QGroundControl (Linux only) for ground station operations.
+  #
+  # Usage:
+  #   nix develop --accept-flake-config
+  #   elodin editor <aleph-ip>:2240
+  #   elodin run examples/ardupilot-hitl/main.py
+  #   qgroundcontrol   # Linux only
+  ###########################################################################
+  flake-utils.lib.eachDefaultSystem (system: let
+    pkgs = import nixpkgs { inherit system; };
+  in {
+    devShells.default = pkgs.mkShell {
+      name = "aleph-ardupilot-gcs";
+      packages = [
+        elodin.packages.${system}.elodin-cli
+        elodin.packages.${system}.elodin-db
+        elodin.packages.${system}.elodin-py
+        pkgs.gcc.cc.lib
+        pkgs.gfortran.cc.lib
+        pkgs.which
+      ] ++ pkgs.lib.optionals pkgs.stdenv.isLinux [
+        pkgs.qgroundcontrol
+      ];
+      shellHook = ''
+        # Prevent uv/elodin from discovering parent-directory .venvs which
+        # would use the wrong Python version and cause SRE module mismatch.
+        unset VIRTUAL_ENV
+        export UV_PYTHON="$(which python3)"
+
+        echo "Aleph ArduPilot ground station shell"
+        echo "  elodin editor <aleph-ip>:2240    - live telemetry viewer"
+        echo "  elodin run sim/ardupilot-hitl/main.py      - HITL simulation"
+      '' + pkgs.lib.optionalString pkgs.stdenv.isLinux ''
+        echo "  qgroundcontrol                   - GCS for ArduPilot"
+      '' + pkgs.lib.optionalString pkgs.stdenv.isDarwin ''
+        echo "  QGroundControl: install from https://docs.qgroundcontrol.com (not available via nix on macOS)"
+      '';
+    };
+  })
+  ###########################################################################
+  # Aleph NixOS system configuration (aarch64-linux target)
+  ###########################################################################
+  // rec {
     system = "aarch64-linux";
 
     ###########################################################################
