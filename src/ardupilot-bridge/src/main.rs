@@ -78,6 +78,21 @@ async fn bridge_loop(config: &Config) -> anyhow::Result<()> {
 
     let mut ap_addr: Option<SocketAddr> = None;
 
+    // Start HITL TCP server in a background thread if enabled.
+    // The HITL server shares the UDP socket and ap_addr with the main loop
+    // via Arc<Mutex<>>. When a HITL client connects, it drives ArduPilot
+    // directly from the TCP connection's FDM packets.
+    if config.hitl_port > 0 {
+        let hitl_port = config.hitl_port;
+        let hitl_udp = udp_socket.try_clone().context("clone UDP for HITL")?;
+        std::thread::spawn(move || {
+            let mut hitl_ap_addr: Option<SocketAddr> = None;
+            if let Err(e) = hitl::run_hitl_loop(hitl_port, &hitl_udp, &mut hitl_ap_addr) {
+                tracing::error!("HITL server error: {}", e);
+            }
+        });
+    }
+
     let mut sub = client.subscribe::<SensorInput>().await?;
     let mut tick: u64 = 0;
     let start = std::time::Instant::now();
