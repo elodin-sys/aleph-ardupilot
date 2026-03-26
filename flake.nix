@@ -26,11 +26,20 @@
     aleph.url = "github:elodin-sys/elodin?rev=80f226daf08f9fb9819adbe2e711e8eec2f83543&dir=aleph";
     flake-utils.follows = "aleph/flake-utils";
     nixpkgs.follows = "aleph/nixpkgs";
+
+    ardupilot-src = {
+      type = "git";
+      url = "https://github.com/ArduPilot/ardupilot";
+      rev = "7de88b5f5ab8e9d1d330af9a641f1cd46eba13ee";
+      flake = false;
+      submodules = true;
+    };
   };
 
   outputs = {
     nixpkgs,
     aleph,
+    ardupilot-src,
     self,
     ...
   }: rec {
@@ -45,17 +54,24 @@
     ###########################################################################
     overlays.default = final: prev: {
       # Pattern 1: Clean nixpkgs dependency
-      # Wraps btop with a custom launcher script
       example-nixpkgs = final.callPackage ./nix/pkgs/example-nixpkgs.nix {};
 
       # Pattern 2: Build from source
-      # Fetches and builds lazygit from GitHub
       example-from-source = final.callPackage ./nix/pkgs/example-from-source.nix {};
 
       # Pattern 3: Local Python application
-      # Packages the hello-service from src/hello-service/
       hello-service = final.callPackage ./nix/pkgs/hello-service.nix {
         src = ./src/hello-service;
+      };
+
+      # ArduPilot SITL binary (built from flake input with submodules)
+      arducopter-sitl = final.callPackage ./nix/pkgs/arducopter.nix {
+        src = ardupilot-src;
+      };
+
+      # ArduPilot bridge: Elodin-DB <-> ArduPilot SITL <-> CAN ESCs
+      ardupilot-bridge = final.callPackage ./nix/pkgs/ardupilot-bridge.nix {
+        src = ./src/ardupilot-bridge;
       };
     };
 
@@ -101,6 +117,9 @@
         # Your Custom Modules
         #######################################################################
         ./nix/modules/hello-service.nix
+        ./nix/modules/arducopter.nix
+        ./nix/modules/ardupilot-bridge.nix
+        ./nix/modules/can.nix
       ];
 
       # Apply overlays (order matters!)
@@ -133,7 +152,23 @@
       services.hello-service = {
         enable = true;
         message = "Hello from Aleph Template Project!";
-        interval = 30;  # Log every 30 seconds
+        interval = 30;
+      };
+
+      #########################################################################
+      # ArduCopter SITL Flight Controller
+      #########################################################################
+      services.arducopter = {
+        enable = true;
+        model = "JSON";
+        homeLocation = "37.7749,-122.4194,10,270";
+      };
+
+      #########################################################################
+      # ArduPilot Bridge (Elodin-DB sensors -> ArduPilot -> CAN ESCs)
+      #########################################################################
+      services.ardupilot-bridge = {
+        enable = true;
       };
 
       #########################################################################

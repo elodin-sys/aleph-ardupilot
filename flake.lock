@@ -25,6 +25,25 @@
         "type": "github"
       }
     },
+    "ardupilot-src": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1774478784,
+        "narHash": "sha256-BGbk0lZ5iIz4x3AOiGAsrXrhvfTT8q/LWfrBtGrwYaY=",
+        "ref": "refs/heads/master",
+        "rev": "7de88b5f5ab8e9d1d330af9a641f1cd46eba13ee",
+        "revCount": 71430,
+        "submodules": true,
+        "type": "git",
+        "url": "https://github.com/ArduPilot/ardupilot"
+      },
+      "original": {
+        "rev": "7de88b5f5ab8e9d1d330af9a641f1cd46eba13ee",
+        "submodules": true,
+        "type": "git",
+        "url": "https://github.com/ArduPilot/ardupilot"
+      }
+    },
     "cuda-legacy": {
       "inputs": {
         "flake-parts": [
@@ -128,6 +147,7 @@
     "root": {
       "inputs": {
         "aleph": "aleph",
+        "ardupilot-src": "ardupilot-src",
         "flake-utils": [
           "aleph",
           "flake-utils"
