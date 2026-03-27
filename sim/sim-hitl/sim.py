@@ -41,7 +41,7 @@ MotorPwm = ty.Annotated[
     el.Component(
         "motor_pwm",
         el.ComponentType(el.PrimitiveType.F64, (4,)),
-        metadata={"element_names": "m0,m1,m2,m3"},
+        metadata={"element_names": "m0,m1,m2,m3", "external_control": "true"},
     ),
 ]
 
@@ -118,7 +118,8 @@ def motor_cmd_to_pwm(cmd: MotorCommand) -> MotorPwm:
     We reconstruct the PWM value and clamp to the active thrust range.
     """
     pwm_raw = cmd * 1000.0 + 1000.0
-    return jnp.clip(pwm_raw, MOT_PWM_THST_MIN, MOT_PWM_THST_MAX)
+    active = cmd > 0.01
+    return jnp.where(active, jnp.clip(pwm_raw, MOT_PWM_THST_MIN, MOT_PWM_THST_MAX), 0.0)
 
 
 @el.map
@@ -140,6 +141,8 @@ def motor_thrust_response(
 
     alpha = dt / (dt + MOT_TIME_CONST)
     rpm = jnp.interp(pwm, pwm_ref, rpm_ref)
+    active = pwm > 0.0
+    rpm = jnp.where(active, rpm, 0.0)
     rpm = prev_rpm + alpha * (rpm - prev_rpm)
 
     thrust = rpm**2 * thrust_constant
@@ -231,4 +234,4 @@ def system() -> el.System:
         | sensors.imu,
     )
 
-    return motor_cmd_to_pwm | inner | ground_constraint
+    return inner | ground_constraint

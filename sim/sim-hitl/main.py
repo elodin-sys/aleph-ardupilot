@@ -117,8 +117,8 @@ def post_step(tick: int, ctx: el.StepContext):
 
     t = tick * config.dt
 
+    # --- Sensors: drone (f64) -> aleph (f32) ---
     try:
-        # --- Sensors: drone (f64) -> aleph (f32) ---
         gyro = np.array(ctx.read_component("drone.gyro"), dtype=np.float32)
         accel = np.array(ctx.read_component("drone.accel"), dtype=np.float32)
         mag = np.array(ctx.read_component("drone.magnetometer"), dtype=np.float32)
@@ -126,14 +126,22 @@ def post_step(tick: int, ctx: el.StepContext):
         ctx.write_component("aleph.gyro", gyro)
         ctx.write_component("aleph.accel", accel)
         ctx.write_component("aleph.mag", mag)
-
-        # --- Motors: ardupilot (f32) -> drone (f64) ---
-        motor_cmd_f32 = np.array(ctx.read_component("ardupilot.motor_command"))
-        motor_cmd = motor_cmd_f32.astype(np.float64)
-        ctx.write_component("drone.motor_command", motor_cmd)
-
     except RuntimeError:
-        pass  # first few ticks may not have data yet
+        pass  # first few ticks may not have sensor data yet
+
+    # --- Motors: ardupilot -> drone ---
+    # Default to zeros until the bridge connects and ArduPilot sends servo output.
+    try:
+        motor_cmd_f32 = np.array(ctx.read_component("ardupilot.motor_command"))
+        ctx.write_component("drone.motor_command", motor_cmd_f32.astype(np.float64))
+    except RuntimeError:
+        ctx.write_component("drone.motor_command", np.zeros(4, dtype=np.float64))
+
+    try:
+        motor_pwm_u16 = np.array(ctx.read_component("ardupilot.motor_pwm"))
+        ctx.write_component("drone.motor_pwm", motor_pwm_u16.astype(np.float64))
+    except RuntimeError:
+        ctx.write_component("drone.motor_pwm", np.zeros(4, dtype=np.float64))
 
     # Periodic status
     if t - _last_print[0] >= 1.0:

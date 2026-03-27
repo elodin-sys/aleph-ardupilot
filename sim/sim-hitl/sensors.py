@@ -140,7 +140,7 @@ def accel_system(
     bias: AccelBias,
 ) -> tuple[AccelLPFDelay, Accel]:
     dt = Config.GLOBAL.fast_loop_time_step
-    body_a = p.angular().inverse() @ (a.linear() / 9.81 + jnp.array([0, 0, 1]))
+    body_a = p.angular().inverse() @ (a.linear() + jnp.array([0, 0, 9.81]))
     if Config.GLOBAL.sensor_noise:
         body_a = accel_noise.sample(body_a, bias, tick)
     lpf = flt.BiquadLPF(INS_ACCEL_FILTER, 1.0 / dt)
