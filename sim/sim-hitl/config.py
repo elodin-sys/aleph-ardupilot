@@ -141,7 +141,7 @@ DEFAULT_CONFIG = Config(
         [0.0, 0.0, 1.0],
     ]),
     motor_thrust_curve_path="./motor_thrust_curve.csv",
-    simulation_rate=300.0,
+    simulation_rate=450.0,
     fast_loop_time_step=1.0 / 900.0,
     simulation_time=60.0,
     sensor_noise=True,

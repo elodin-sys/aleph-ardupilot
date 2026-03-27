@@ -27,15 +27,18 @@ async fn run() -> anyhow::Result<()> {
     let config = Config::parse();
     tracing::info!("ardupilot-bridge starting with config: {:?}", config);
 
+    // Stable VTable ID so retries don't spam the DB with new registrations.
+    let telemetry_id: PacketId = fastrand::u16(..).to_le_bytes();
+
     loop {
-        if let Err(err) = bridge_loop(&config).await {
+        if let Err(err) = bridge_loop(&config, telemetry_id).await {
             tracing::error!("bridge error: {:?}", err);
             stellarator::sleep(Duration::from_millis(500)).await;
         }
     }
 }
 
-async fn bridge_loop(config: &Config) -> anyhow::Result<()> {
+async fn bridge_loop(config: &Config, telemetry_id: PacketId) -> anyhow::Result<()> {
     let elodin_addr: SocketAddr = config
         .elodin_addr
         .parse()
@@ -46,7 +49,6 @@ async fn bridge_loop(config: &Config) -> anyhow::Result<()> {
         .await
         .map_err(anyhow::Error::from)?;
 
-    let telemetry_id: PacketId = fastrand::u16(..).to_le_bytes();
     client.init_world::<MotorTelemetry>(telemetry_id).await?;
 
     // ArduPilot SITL JSON protocol:
