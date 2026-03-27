@@ -302,6 +302,95 @@
     };
 
     ###########################################################################
+    # Sim-HITL NixOS Module
+    #
+    # Like the default module but without the local sensor stack.
+    # The ardupilot-bridge connects to the laptop's Elodin-DB instead of a
+    # local one.  Deploy with:
+    #   ./deploy.sh -c sim-hitl -h 192.168.4.185 -u root
+    ###########################################################################
+    nixosModules.sim-hitl = {config, pkgs, lib, ...}: {
+      imports = with aleph.nixosModules; [
+        # Hardware (same as default)
+        jetpack hardware fs
+        usb-eth wifi
+        aleph-setup aleph-base aleph-dev
+
+        # NO sensor-fw, mekf, elodin-db, aleph-serial-bridge, tegrastats-bridge
+        # Sensor data comes from the laptop simulation via Elodin-DB over TCP.
+
+        # Custom modules
+        ./nix/modules/hello-service.nix
+        ./nix/modules/arducopter.nix
+        ./nix/modules/ardupilot-bridge.nix
+        ./nix/modules/can.nix
+      ];
+
+      nixpkgs.overlays = [
+        aleph.overlays.jetpack
+        aleph.overlays.default
+        overlays.default
+      ];
+
+      system.stateVersion = "25.11";
+      i18n.supportedLocales = [(config.i18n.defaultLocale + "/UTF-8")];
+
+      services.nvpmodel = { enable = true; profileNumber = 0; };
+      systemd.services.nvpmodel.serviceConfig.ExecStart = lib.mkForce ''
+        /run/current-system/sw/bin/nvpmodel --force -f /etc/nvpmodel.conf -m 0
+      '';
+
+      services.hello-service = {
+        enable = true;
+        message = "Aleph sim-HITL mode";
+        interval = 30;
+      };
+
+      services.arducopter = {
+        enable = true;
+        model = "JSON";
+        homeLocation = "37.7749,-122.4194,10,270";
+      };
+
+      #########################################################################
+      # ArduPilot Bridge -- points at the LAPTOP's Elodin-DB
+      # Change this IP to your laptop's address on the shared network.
+      #########################################################################
+      services.ardupilot-bridge = {
+        enable = true;
+        elodinAddr = "192.168.4.182:2240";
+        hitlPort = 9100;
+      };
+
+      environment.systemPackages = with pkgs; [
+        git vim tmux htop btop wget curl
+        usbutils pciutils lshw python3
+      ];
+
+      users.users.aleph = {
+        isNormalUser = true;
+        openssh.authorizedKeys.keys = [
+          "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKtPjReJktl58C9GKjgl0pkUZ87XqpYKfOiSqXrhwoXq aleph-key"
+        ];
+        extraGroups = [ "wheel" "dialout" "video" "audio" "networkmanager" "podman" ];
+        shell = "/run/current-system/sw/bin/bash";
+      };
+
+      services.openssh = {
+        enable = true;
+        settings = {
+          PasswordAuthentication = true;
+          PubkeyAuthentication = true;
+          PermitRootLogin = "yes";
+        };
+      };
+
+      security.sudo.wheelNeedsPassword = false;
+      nix.settings.trusted-users = ["@wheel" "root" "ubuntu" "aleph"];
+      networking.firewall.enable = false;
+    };
+
+    ###########################################################################
     # NixOS Configurations
     #
     # Define different system configurations here. The 'default' configuration
@@ -313,11 +402,11 @@
         modules = [nixosModules.default];
       };
 
-      # Example: Add additional configurations for different use cases
-      # minimal = nixpkgs.lib.nixosSystem {
-      #   inherit system;
-      #   modules = [nixosModules.minimal];
-      # };
+      # Sim-HITL: bridge + ArduPilot on Aleph, physics sim on laptop
+      sim-hitl = nixpkgs.lib.nixosSystem {
+        inherit system;
+        modules = [nixosModules.sim-hitl];
+      };
     };
 
     ###########################################################################
@@ -332,6 +421,7 @@
       # System toplevel - used by deploy.sh for OTA updates
       default = nixosConfigurations.default.config.system.build.toplevel;
       toplevel = nixosConfigurations.default.config.system.build.toplevel;
+      sim-hitl = nixosConfigurations.sim-hitl.config.system.build.toplevel;
     };
   };
 }
