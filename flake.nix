@@ -23,8 +23,8 @@
   };
 
   inputs = {
-    aleph.url = "github:elodin-sys/elodin?rev=80f226daf08f9fb9819adbe2e711e8eec2f83543&dir=aleph";
-    elodin.url = "github:elodin-sys/elodin?rev=80f226daf08f9fb9819adbe2e711e8eec2f83543";
+    aleph.url = "github:elodin-sys/elodin?rev=1b2615f508c2296c49e803ae5f13b4a82713bea2&dir=aleph";
+    elodin.url = "github:elodin-sys/elodin?rev=1b2615f508c2296c49e803ae5f13b4a82713bea2";
     flake-utils.follows = "aleph/flake-utils";
     nixpkgs.follows = "aleph/nixpkgs";
 
@@ -212,6 +212,8 @@
         enable = true;
         model = "JSON";
         homeLocation = "37.7749,-122.4194,10,270";
+        defaultsFile = ./src/ardupilot-defaults.param;
+        extraFlags = [ "--serial0" "udpclient:192.168.4.182:14550" ];
       };
 
       #########################################################################

@@ -28,4 +28,32 @@ pub struct Config {
     /// SocketCAN interface for DroneCAN ESC output (empty = disabled)
     #[arg(long, default_value = "", env = "CAN_INTERFACE")]
     pub can_interface: String,
+
+    /// ArduPilot home location as "lat,lon,alt,heading". Must match the
+    /// --home flag passed to arducopter so the bridge can convert GPS LLA
+    /// to NED position relative to the same origin.
+    #[arg(long, default_value = "37.7749,-122.4194,10,270", env = "AP_HOME")]
+    pub home: String,
+}
+
+/// Parsed home location for NED coordinate conversions.
+#[derive(Debug, Clone, Copy)]
+pub struct HomeLocation {
+    pub lat_deg: f64,
+    pub lon_deg: f64,
+    pub alt_m: f64,
+}
+
+impl HomeLocation {
+    pub fn parse(s: &str) -> anyhow::Result<Self> {
+        let parts: Vec<&str> = s.split(',').collect();
+        if parts.len() < 3 {
+            anyhow::bail!("home location needs at least lat,lon,alt -- got {:?}", s);
+        }
+        Ok(Self {
+            lat_deg: parts[0].parse()?,
+            lon_deg: parts[1].parse()?,
+            alt_m: parts[2].parse()?,
+        })
+    }
 }

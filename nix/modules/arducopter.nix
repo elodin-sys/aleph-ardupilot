@@ -34,6 +34,12 @@ in
       default = "/var/lib/arducopter";
       description = "Working directory for ArduPilot (stores eeprom.bin, logs, terrain).";
     };
+
+    defaultsFile = mkOption {
+      type = types.nullOr types.path;
+      default = null;
+      description = "ArduPilot parameter defaults file (passed via --defaults).";
+    };
   };
 
   config = mkIf cfg.enable {
@@ -47,14 +53,14 @@ in
       wantedBy = [ "multi-user.target" ];
 
       serviceConfig = {
-        # --serial0 mcast: uses UDP multicast for MAVLink, avoids blocking
-        # on TCP accept that prevents the SITL loop from starting.
         ExecStart = concatStringsSep " " ([
           "${pkgs.arducopter-sitl}/bin/arducopter"
           "--model" cfg.model
           "--home" cfg.homeLocation
           "--serial0" "mcast:"
-        ] ++ cfg.extraFlags);
+        ] ++ (lib.optionals (cfg.defaultsFile != null) [
+          "--defaults" "${cfg.defaultsFile}"
+        ]) ++ cfg.extraFlags);
 
         WorkingDirectory = cfg.workingDirectory;
         Restart = "on-failure";

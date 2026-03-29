@@ -38,6 +38,12 @@ in
       default = "";
       description = "SocketCAN interface for DroneCAN ESC output (empty = disabled).";
     };
+
+    homeLocation = mkOption {
+      type = types.str;
+      default = config.services.arducopter.homeLocation;
+      description = "Home location (lat,lon,alt,heading). Defaults to arducopter's homeLocation.";
+    };
   };
 
   config = mkIf cfg.enable {
@@ -52,6 +58,7 @@ in
         NUM_MOTORS = toString cfg.numMotors;
         HITL_PORT = toString cfg.hitlPort;
         CAN_INTERFACE = cfg.canInterface;
+        AP_HOME = cfg.homeLocation;
         RUST_LOG = "info";
       };
 
