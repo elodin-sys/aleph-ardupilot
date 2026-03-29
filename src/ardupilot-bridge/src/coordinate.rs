@@ -120,3 +120,29 @@ pub fn ubx_vel_to_ms(vel_ned_mm: [i32; 3]) -> [f64; 3] {
 pub fn ubx_heading_to_rad(heading_e5: i32) -> f64 {
     (heading_e5 as f64 * 1e-5).to_radians()
 }
+
+// ---------------------------------------------------------------------------
+// Heading fusion
+// ---------------------------------------------------------------------------
+
+/// Blend two angles (radians) with correct wraparound handling.
+/// `alpha` is the blend factor: 0.0 = purely `a`, 1.0 = purely `b`.
+pub fn blend_angle(a: f64, b: f64, alpha: f64) -> f64 {
+    let mut diff = b - a;
+    // Normalize diff to [-pi, pi]
+    while diff > std::f64::consts::PI {
+        diff -= 2.0 * std::f64::consts::PI;
+    }
+    while diff < -std::f64::consts::PI {
+        diff += 2.0 * std::f64::consts::PI;
+    }
+    let mut result = a + alpha * diff;
+    // Normalize result to [-pi, pi]
+    while result > std::f64::consts::PI {
+        result -= 2.0 * std::f64::consts::PI;
+    }
+    while result < -std::f64::consts::PI {
+        result += 2.0 * std::f64::consts::PI;
+    }
+    result
+}

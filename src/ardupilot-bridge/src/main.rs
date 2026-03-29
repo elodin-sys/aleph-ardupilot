@@ -4,6 +4,7 @@ mod config;
 mod coordinate;
 mod elodin;
 mod hitl;
+mod imu_filter;
 
 use crate::ardupilot_ipc::{ServoOutput, SitlJsonPacket, ImuData};
 use crate::can_output::CanOutput;
@@ -11,9 +12,10 @@ use crate::config::{Config, HomeLocation};
 use crate::coordinate::{
     gyro_flu_to_frd, accel_flu_to_frd,
     ubx_lla_to_ned, ubx_vel_to_ms, ubx_heading_to_rad,
-    mekf_quat_to_euler_ned,
+    mekf_quat_to_euler_ned, blend_angle,
 };
 use crate::elodin::{M10QInput, MekfInput, MotorTelemetry, SensorInput};
+use crate::imu_filter::ConingIntegrator;
 
 use anyhow::Context;
 use clap::Parser;
@@ -37,6 +39,7 @@ struct GpsCache {
     has_fix: bool,
     satellites: u8,
     h_acc_m: f64,
+    ground_speed_ms: f64,
 }
 
 impl Default for GpsCache {
@@ -48,6 +51,31 @@ impl Default for GpsCache {
             has_fix: false,
             satellites: 0,
             h_acc_m: 999.0,
+            ground_speed_ms: 0.0,
+        }
+    }
+}
+
+/// Cached filtered IMU output from the coning/sculling integrator.
+/// Written by the IMU background thread at ~400 Hz (every 4 raw samples),
+/// read by the main loop for JSON packet construction.
+#[derive(Debug, Clone, Copy)]
+struct ImuCache {
+    gyro: [f64; 3],      // coning-corrected FRD rad/s
+    accel: [f64; 3],     // sculling-corrected FRD m/s^2
+    timestamp: f64,       // seconds since bridge start
+    seq: u64,             // monotonic output sequence number (~400 Hz)
+    raw_count: u64,       // total raw samples processed (~1500 Hz)
+}
+
+impl Default for ImuCache {
+    fn default() -> Self {
+        Self {
+            gyro: [0.0; 3],
+            accel: [0.0; 3],
+            timestamp: 0.0,
+            seq: 0,
+            raw_count: 0,
         }
     }
 }
@@ -102,10 +130,10 @@ async fn bridge_loop(
         .context("invalid elodin_addr")?;
 
     tracing::info!("connecting to Elodin-DB at {}", elodin_addr);
+
     let mut client = Client::connect(elodin_addr)
         .await
         .map_err(anyhow::Error::from)?;
-
     client.init_world::<MotorTelemetry>(telemetry_id).await?;
 
     let bind_addr: SocketAddr = format!("0.0.0.0:{}", config.servo_port)
@@ -172,13 +200,31 @@ async fn bridge_loop(
     }
 
     // -----------------------------------------------------------------------
-    // Main sensor loop -- IMU-rate, drives ArduPilot JSON packets.
+    // IMU subscription -- background thread, ~1500 Hz from STM32 sensor-fw.
+    // Uses the same pattern as GPS/MEKF (separate stellarator runtime in a
+    // dedicated thread) because the main async runtime's subscription
+    // doesn't reliably deliver data after a fresh DB restart.
     // -----------------------------------------------------------------------
-    let mut sub = client.subscribe::<SensorInput>().await?;
-    let mut tick: u64 = 0;
-    let start = std::time::Instant::now();
+    let imu_cache = Arc::new(Mutex::new(ImuCache::default()));
+    {
+        let imu_cache = Arc::clone(&imu_cache);
+        let elodin_addr_str = config.elodin_addr.clone();
+        std::thread::spawn(move || {
+            if let Err(e) = stellarator::run(move || imu_task(elodin_addr_str, imu_cache)) {
+                tracing::error!("IMU task fatal: {:?}", e);
+            }
+        });
+    }
+
+    // -----------------------------------------------------------------------
+    // Main loop -- polls filtered IMU cache (~400 Hz from the background
+    // integrator) and sends JSON packets to ArduPilot.
+    // -----------------------------------------------------------------------
+    let mut last_imu_seq: u64 = 0;
+    let mut output_tick: u64 = 0;
 
     loop {
+        // Check for servo output from ArduPilot (non-blocking)
         let mut servo_buf = [0u8; 256];
         if let Ok((n, src)) = udp_socket.recv_from(&mut servo_buf) {
             if let Some(servo) = ServoOutput::from_bytes(&servo_buf[..n]) {
@@ -209,79 +255,88 @@ async fn bridge_loop(
 
                 let telemetry = MotorTelemetry::new(motor_pwm, motor_cmd);
                 let table = telemetry.to_table_packet(telemetry_id);
-                sub.send(table).await.0?;
-
-                tick += 1;
-                if tick % 1000 == 0 {
-                    let gps = gps_cache.lock().unwrap();
-                    let att = attitude_cache.lock().unwrap();
-                    tracing::info!(
-                        "tick={} gps_fix={} sats={} h_acc={:.2}m att=[{:.1},{:.1},{:.1}]deg mekf={}",
-                        tick,
-                        gps.has_fix, gps.satellites, gps.h_acc_m,
-                        att.euler_ned[0].to_degrees(),
-                        att.euler_ned[1].to_degrees(),
-                        att.euler_ned[2].to_degrees(),
-                        att.valid,
-                    );
-                }
+                client.send(table).await.0?;
             }
         }
 
-        if let Some(target) = ap_addr {
-            let input = sub.next().await?;
-            let timestamp = start.elapsed().as_secs_f64();
+        if ap_addr.is_none() {
+            continue;
+        }
+        let target = ap_addr.unwrap();
 
-            let gyro_frd = gyro_flu_to_frd([
-                input.gyro[0] as f64,
-                input.gyro[1] as f64,
-                input.gyro[2] as f64,
-            ]);
-            let accel_frd = accel_flu_to_frd([
-                input.accel[0] as f64,
-                input.accel[1] as f64,
-                input.accel[2] as f64,
-            ]);
+        // Poll IMU cache for new samples
+        let imu = {
+            let c = imu_cache.lock().unwrap();
+            *c
+        };
 
-            // Position and velocity from GPS cache
-            let gps = gps_cache.lock().unwrap();
-            let (position, velocity) = if gps.has_fix {
-                (gps.position_ned, gps.velocity_ned)
+        if imu.seq == 0 || imu.seq == last_imu_seq {
+            stellarator::sleep(Duration::from_micros(500)).await;
+            continue;
+        }
+        last_imu_seq = imu.seq;
+        output_tick += 1;
+
+        let gps = gps_cache.lock().unwrap();
+        let (position, velocity, ground_speed_ms) = if gps.has_fix {
+            (gps.position_ned, gps.velocity_ned, gps.ground_speed_ms)
+        } else {
+            ([0.0; 3], [0.0; 3], 0.0)
+        };
+        let gps_yaw = gps.yaw_rad;
+        let gps_fix = gps.has_fix;
+        drop(gps);
+
+        let att = attitude_cache.lock().unwrap();
+        let attitude = if att.valid {
+            let mekf_yaw = att.euler_ned[2];
+            let yaw = if !gps_fix {
+                mekf_yaw
+            } else if ground_speed_ms > 3.0 {
+                gps_yaw
+            } else if ground_speed_ms > 1.0 {
+                let alpha = (ground_speed_ms - 1.0) / 2.0;
+                blend_angle(mekf_yaw, gps_yaw, alpha)
             } else {
-                ([0.0; 3], [0.0; 3])
+                mekf_yaw
             };
-            drop(gps);
+            [att.euler_ned[0], att.euler_ned[1], yaw]
+        } else if gps_fix {
+            [0.0, 0.0, gps_yaw]
+        } else {
+            [0.0; 3]
+        };
+        drop(att);
 
-            // Attitude from MEKF (sensor-fused real compass + IMU),
-            // falling back to GPS heading if MEKF not available yet.
-            let att = attitude_cache.lock().unwrap();
-            let attitude = if att.valid {
-                att.euler_ned
-            } else {
-                let gps = gps_cache.lock().unwrap();
-                if gps.has_fix {
-                    [0.0, 0.0, gps.yaw_rad]
-                } else {
-                    [0.0; 3]
-                }
-            };
-            drop(att);
+        let packet = SitlJsonPacket {
+            timestamp: imu.timestamp,
+            imu: ImuData {
+                gyro: imu.gyro,
+                accel_body: imu.accel,
+            },
+            position,
+            velocity,
+            attitude,
+        };
 
-            let packet = SitlJsonPacket {
-                timestamp,
-                imu: ImuData {
-                    gyro: gyro_frd,
-                    accel_body: accel_frd,
-                },
-                position,
-                velocity,
-                attitude,
-            };
+        let json_bytes = packet.to_json_bytes();
+        udp_socket
+            .send_to(&json_bytes, target)
+            .context("send sensor JSON to ArduPilot")?;
 
-            let json_bytes = packet.to_json_bytes();
-            udp_socket
-                .send_to(&json_bytes, target)
-                .context("send sensor JSON to ArduPilot")?;
+        if output_tick % 400 == 0 {
+            let att_c = attitude_cache.lock().unwrap();
+            let gps_c = gps_cache.lock().unwrap();
+            tracing::info!(
+                "out={} raw={} ratio={:.1} gps={} sats={} att=[{:.1},{:.1},{:.1}]deg",
+                output_tick,
+                imu.raw_count,
+                imu.raw_count as f64 / output_tick.max(1) as f64,
+                gps_c.has_fix, gps_c.satellites,
+                att_c.euler_ned[0].to_degrees(),
+                att_c.euler_ned[1].to_degrees(),
+                att_c.euler_ned[2].to_degrees(),
+            );
         }
     }
 }
@@ -289,6 +344,77 @@ async fn bridge_loop(
 // ---------------------------------------------------------------------------
 // Background tasks: GPS and MEKF subscriptions
 // ---------------------------------------------------------------------------
+
+/// IMU subscription task. Runs in a dedicated thread with its own stellarator
+/// runtime and Elodin-DB connection. Updates the shared ImuCache at ~1500 Hz.
+async fn imu_task(
+    elodin_addr: String,
+    cache: Arc<Mutex<ImuCache>>,
+) -> anyhow::Result<()> {
+    let start = std::time::Instant::now();
+    loop {
+        match imu_subscribe_loop(&elodin_addr, &cache, &start).await {
+            Ok(()) => {}
+            Err(e) => {
+                tracing::warn!("IMU subscription error (will retry): {}", e);
+                stellarator::sleep(Duration::from_secs(1)).await;
+            }
+        }
+    }
+}
+
+async fn imu_subscribe_loop(
+    elodin_addr: &str,
+    cache: &Arc<Mutex<ImuCache>>,
+    start: &std::time::Instant,
+) -> anyhow::Result<()> {
+    let addr: SocketAddr = elodin_addr.parse().context("parse elodin addr for IMU")?;
+    let mut client = Client::connect(addr).await.map_err(anyhow::Error::from)?;
+    let mut sub = client.subscribe::<SensorInput>().await?;
+    tracing::info!("IMU: subscribed to IMU vtable");
+
+    let mut integrator = ConingIntegrator::new();
+    let mut raw_count: u64 = 0;
+    let mut output_seq: u64 = 0;
+    let mut prev_ts = start.elapsed().as_secs_f64();
+
+    loop {
+        let input = sub.next().await?;
+        raw_count += 1;
+        let timestamp = start.elapsed().as_secs_f64();
+        let dt = timestamp - prev_ts;
+        prev_ts = timestamp;
+
+        let gyro_frd = gyro_flu_to_frd([
+            input.gyro[0] as f64,
+            input.gyro[1] as f64,
+            input.gyro[2] as f64,
+        ]);
+        let accel_frd = accel_flu_to_frd([
+            input.accel[0] as f64,
+            input.accel[1] as f64,
+            input.accel[2] as f64,
+        ]);
+
+        if let Some(filtered) = integrator.push(gyro_frd, accel_frd, dt) {
+            output_seq += 1;
+            {
+                let mut c = cache.lock().unwrap();
+                c.gyro = filtered.gyro;
+                c.accel = filtered.accel;
+                c.timestamp = timestamp;
+                c.seq = output_seq;
+                c.raw_count = raw_count;
+            }
+        }
+
+        if raw_count % 10000 == 1 {
+            tracing::info!("IMU: raw={} filtered={} ratio={:.1}",
+                raw_count, output_seq,
+                raw_count as f64 / output_seq.max(1) as f64);
+        }
+    }
+}
 
 /// GPS subscription task. Reconnects on error.
 /// TODO: simulation -- synthetic M10Q rows from sim for HITL testing.
@@ -340,6 +466,7 @@ async fn gps_subscribe_loop(
 
         let yaw_rad = ubx_heading_to_rad(gps.heading_motion);
         let h_acc_m = gps.h_acc as f64 * 1e-3;
+        let ground_speed_ms = gps.ground_speed as f64 * 1e-3;
 
         {
             let mut c = cache.lock().unwrap();
@@ -349,6 +476,7 @@ async fn gps_subscribe_loop(
             c.has_fix = has_fix;
             c.satellites = gps.satellites;
             c.h_acc_m = h_acc_m;
+            c.ground_speed_ms = ground_speed_ms;
         }
 
         gps_tick += 1;
