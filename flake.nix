@@ -318,8 +318,14 @@
         usb-eth wifi
         aleph-setup aleph-base aleph-dev
 
-        # NO sensor-fw, mekf, elodin-db, aleph-serial-bridge, tegrastats-bridge
-        # Sensor data comes from the laptop simulation via Elodin-DB over TCP.
+        # Keep the local sensor stack running so real hardware data
+        # continues flowing into the Aleph's own Elodin-DB.  Only the
+        # ardupilot-bridge's elodinAddr changes (pointing at the laptop).
+        sensor-fw
+        mekf
+        elodin-db
+        aleph-serial-bridge
+        tegrastats-bridge
 
         # Custom modules
         ./nix/modules/hello-service.nix

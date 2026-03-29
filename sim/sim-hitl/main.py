@@ -4,14 +4,21 @@ The ardupilot-bridge (running on the Aleph) connects to this simulation's
 Elodin-DB.  Data flows entirely through the DB -- the same code path as
 real hardware:
 
-    Simulation  -->  "IMU" entity (gyro/accel/mag)  -->  bridge subscribes
-    bridge writes "ardupilot" entity (motor_command)  -->  Simulation reads
+    Simulation  -->  "IMU" entity (gyro/accel/mag f32)   -->  bridge subscribes
+    Simulation  -->  "M10Q" entity (GPS UBX integers)    -->  bridge subscribes
+    bridge writes "ardupilot" entity (motor_command)     -->  Simulation reads
+
+The bridge is completely unaware a simulation is involved -- it sees the
+exact same DB schema as when real hardware sensors are writing.
 
 Usage:
     elodin editor sim/sim-hitl/main.py   # with 3D visualisation
     elodin run sim/sim-hitl/main.py      # headless
 """
 
+import math
+import os
+import shutil
 import time
 
 import elodin as el
@@ -19,6 +26,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from config import DEFAULT_CONFIG, Config
+from gps import GPS, gps as gps_system
 from sensors import IMU
 from sim import Drone, system
 
@@ -28,6 +36,8 @@ from sim import Drone, system
 
 config = DEFAULT_CONFIG
 config.set_as_global()
+
+DB_PATH = "/tmp/sim-hitl-db"
 
 # ---------------------------------------------------------------------------
 # World
@@ -43,17 +53,17 @@ drone = world.spawn(
         ),
         Drone(),
         IMU(),
+        GPS(),
     ],
     name="drone",
 )
 
 # Interface entities matching the bridge's VTable namespaces.
-# "IMU"       -- sensor data the bridge subscribes to (matches serial-bridge)
-# "ardupilot" -- motor data the bridge writes (same as MotorTelemetry)
-# Spawned empty; the post_step populates them with f32 data matching the
-# bridge's exact schema.  This avoids f32/f64 dtype conflicts with the
-# physics systems which use f64 internally.
+# "IMU"       -- gyro/accel/mag in f32 (same schema as serial-bridge writes)
+# "M10Q"      -- GPS in UBX integer format (same schema as serial-bridge writes)
+# "ardupilot" -- motor data the bridge writes back (MotorTelemetry)
 imu = world.spawn([], name="IMU")
+m10q = world.spawn([], name="M10Q")
 ardupilot = world.spawn([], name="ardupilot")
 
 # ---------------------------------------------------------------------------
@@ -77,6 +87,13 @@ world.schematic(
             graph "IMU.gyro" name="Gyroscope f32 (to bridge)"
             graph "drone.accel" name="Accelerometer (physics)"
             graph "drone.magnetometer" name="Magnetometer (physics)"
+        }
+        vsplit name="GPS" {
+            graph "drone.gps_lat" name="GPS Latitude (deg)"
+            graph "drone.gps_lon" name="GPS Longitude (deg)"
+            graph "drone.gps_alt_msl" name="GPS Altitude MSL (m)"
+            graph "drone.gps_vel_ned" name="GPS Velocity NED (m/s)"
+            graph "drone.gps_ground_speed" name="GPS Ground Speed (m/s)"
         }
         vsplit name="State" {
             graph "drone.world_pos.linear()" name="Position (ENU m)"
@@ -111,13 +128,13 @@ _start_time = [None]
 
 
 def post_step(tick: int, ctx: el.StepContext):
-    """Copy sensor data from drone -> IMU, motor commands from ardupilot -> drone."""
+    """Copy sensor data from drone -> IMU/M10Q, motor commands from ardupilot -> drone."""
     if _start_time[0] is None:
         _start_time[0] = time.time()
 
     t = tick * config.dt
 
-    # --- Sensors: drone (f64) -> IMU (f32) ---
+    # --- IMU: drone (f64) -> IMU entity (f32) ---
     try:
         gyro = np.array(ctx.read_component("drone.gyro"), dtype=np.float32)
         accel = np.array(ctx.read_component("drone.accel"), dtype=np.float32)
@@ -127,10 +144,52 @@ def post_step(tick: int, ctx: el.StepContext):
         ctx.write_component("IMU.accel", accel)
         ctx.write_component("IMU.mag", mag)
     except RuntimeError:
-        pass  # first few ticks may not have sensor data yet
+        pass
+
+    # --- GPS: drone (f64) -> M10Q entity (UBX integer format) ---
+    # Only write when the GPS system has produced a new fix (gps_set == 1).
+    try:
+        gps_set_raw = np.array(ctx.read_component("drone.gps_set"))
+        gps_set_val = int(gps_set_raw.flat[0])
+    except RuntimeError:
+        gps_set_val = 0
+
+    if gps_set_val:
+        try:
+            lat = float(np.array(ctx.read_component("drone.gps_lat")).flat[0])
+            lon = float(np.array(ctx.read_component("drone.gps_lon")).flat[0])
+            alt = float(np.array(ctx.read_component("drone.gps_alt_msl")).flat[0])
+            vel = np.array(ctx.read_component("drone.gps_vel_ned"), dtype=np.float64).flatten()
+            gs = float(np.array(ctx.read_component("drone.gps_ground_speed")).flat[0])
+            hdg = float(np.array(ctx.read_component("drone.gps_heading")).flat[0])
+
+            lat_e7 = int(round(lat * 1e7))
+            lon_e7 = int(round(lon * 1e7))
+            alt_mm = int(round(alt * 1e3))
+            vel_ned_mms = [int(round(v * 1e3)) for v in vel]
+            gs_mms = int(round(gs * 1e3))
+            hdg_e5 = int(round(hdg * 1e5))
+            h_acc_mm = int(round(config.gps_hacc_std * 1e3))
+            v_acc_mm = int(round(config.gps_vacc_std * 1e3))
+            s_acc_mms = int(round(config.gps_sacc_std * 1e3))
+
+            ctx.write_component("M10Q.lat", np.array([lat_e7], dtype=np.int32))
+            ctx.write_component("M10Q.lon", np.array([lon_e7], dtype=np.int32))
+            ctx.write_component("M10Q.alt_msl", np.array([alt_mm], dtype=np.int32))
+            ctx.write_component("M10Q.alt_wgs84", np.array([alt_mm], dtype=np.int32))
+            ctx.write_component("M10Q.vel_ned", np.array(vel_ned_mms, dtype=np.int32))
+            ctx.write_component("M10Q.fix_type", np.array([3], dtype=np.uint8))
+            ctx.write_component("M10Q.satellites", np.array([12], dtype=np.uint8))
+            ctx.write_component("M10Q.h_acc", np.array([h_acc_mm], dtype=np.uint32))
+            ctx.write_component("M10Q.v_acc", np.array([v_acc_mm], dtype=np.uint32))
+            ctx.write_component("M10Q.s_acc", np.array([s_acc_mms], dtype=np.uint32))
+            ctx.write_component("M10Q.ground_speed", np.array([gs_mms], dtype=np.uint32))
+            ctx.write_component("M10Q.heading_motion", np.array([hdg_e5], dtype=np.int32))
+            ctx.write_component("M10Q.valid_flags", np.array([0x37], dtype=np.uint8))
+        except RuntimeError:
+            pass
 
     # --- Motors: ardupilot -> drone ---
-    # Default to zeros until the bridge connects and ArduPilot sends servo output.
     try:
         motor_cmd_f32 = np.array(ctx.read_component("ardupilot.motor_command"))
         ctx.write_component("drone.motor_command", motor_cmd_f32.astype(np.float64))
@@ -152,10 +211,17 @@ def post_step(tick: int, ctx: el.StepContext):
             pos = np.array(ctx.read_component("drone.world_pos"))
             z = pos[6] if len(pos) > 6 else 0.0
             cmd = np.array(ctx.read_component("drone.motor_command"))
+            gps_info = ""
+            try:
+                glat = float(np.array(ctx.read_component("drone.gps_lat")).flat[0])
+                glon = float(np.array(ctx.read_component("drone.gps_lon")).flat[0])
+                gps_info = f" | gps=({glat:.4f},{glon:.4f})"
+            except RuntimeError:
+                gps_info = " | gps=n/a"
             print(
                 f"  t={t:5.1f}s | z={z:+.2f}m | "
                 f"motors=[{cmd[0]:.3f},{cmd[1]:.3f},{cmd[2]:.3f},{cmd[3]:.3f}] | "
-                f"{rtf:.1f}x RT"
+                f"{rtf:.1f}x RT{gps_info}"
             )
         except Exception:
             print(f"  t={t:5.1f}s | (waiting for data)")
@@ -165,25 +231,34 @@ def post_step(tick: int, ctx: el.StepContext):
 # Run
 # ---------------------------------------------------------------------------
 
-sim_system = system()
+sim_system = system() | gps_system
 
 print("ArduPilot sim-HITL Simulation")
 print("=============================")
 print(f"Mass: {config.mass:.1f} kg")
 print(f"Simulation rate: {config.simulation_rate:.0f} Hz (inner: {1/config.fast_loop_time_step:.0f} Hz)")
+print(f"GPS: {config.gps_rate:.0f} Hz, boot delay {config.gps_boot_delay:.0f}s, "
+      f"hacc {config.gps_hacc_std:.1f}m, vacc {config.gps_vacc_std:.1f}m")
+print(f"Home: {config.home_lat:.4f}, {config.home_lon:.4f}, {config.home_alt:.0f}m")
 print(f"Duration: {config.simulation_time:.0f} s")
+print(f"DB path: {DB_PATH}")
 print()
 print("Data flows through the DB -- same code path as real hardware.")
 print('  Bridge reads: "IMU" entity (gyro/accel/mag)')
+print('  Bridge reads: "M10Q" entity (GPS UBX integers)')
 print('  Bridge writes: "ardupilot" entity (motor_command/motor_pwm)')
 print()
 print("Deploy sim-hitl config to the Aleph:")
-print("  ./deploy.sh -c sim-hitl -h <aleph-ip> -u root -i ssh/aleph-key")
+print("  ./deploy.sh -c sim-hitl -h <aleph-ip> -u root")
 print()
+
+if os.path.exists(DB_PATH):
+    shutil.rmtree(DB_PATH)
 
 world.run(
     sim_system,
     simulation_rate=config.simulation_rate,
     generate_real_time=True,
     post_step=post_step,
+    db_path=DB_PATH,
 )
