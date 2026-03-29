@@ -4,7 +4,7 @@ The ardupilot-bridge (running on the Aleph) connects to this simulation's
 Elodin-DB.  Data flows entirely through the DB -- the same code path as
 real hardware:
 
-    Simulation  -->  "aleph" entity (gyro/accel/mag)  -->  bridge subscribes
+    Simulation  -->  "IMU" entity (gyro/accel/mag)  -->  bridge subscribes
     bridge writes "ardupilot" entity (motor_command)  -->  Simulation reads
 
 Usage:
@@ -48,12 +48,12 @@ drone = world.spawn(
 )
 
 # Interface entities matching the bridge's VTable namespaces.
-# "aleph"     -- sensor data the bridge subscribes to (same as serial-bridge)
+# "IMU"       -- sensor data the bridge subscribes to (matches serial-bridge)
 # "ardupilot" -- motor data the bridge writes (same as MotorTelemetry)
 # Spawned empty; the post_step populates them with f32 data matching the
 # bridge's exact schema.  This avoids f32/f64 dtype conflicts with the
 # physics systems which use f64 internally.
-aleph = world.spawn([], name="aleph")
+imu = world.spawn([], name="IMU")
 ardupilot = world.spawn([], name="ardupilot")
 
 # ---------------------------------------------------------------------------
@@ -74,7 +74,7 @@ world.schematic(
         }
         vsplit name="Sensors" {
             graph "drone.gyro" name="Gyroscope f64 (physics)"
-            graph "aleph.gyro" name="Gyroscope f32 (to bridge)"
+            graph "IMU.gyro" name="Gyroscope f32 (to bridge)"
             graph "drone.accel" name="Accelerometer (physics)"
             graph "drone.magnetometer" name="Magnetometer (physics)"
         }
@@ -111,21 +111,21 @@ _start_time = [None]
 
 
 def post_step(tick: int, ctx: el.StepContext):
-    """Copy sensor data from drone -> aleph, motor commands from ardupilot -> drone."""
+    """Copy sensor data from drone -> IMU, motor commands from ardupilot -> drone."""
     if _start_time[0] is None:
         _start_time[0] = time.time()
 
     t = tick * config.dt
 
-    # --- Sensors: drone (f64) -> aleph (f32) ---
+    # --- Sensors: drone (f64) -> IMU (f32) ---
     try:
         gyro = np.array(ctx.read_component("drone.gyro"), dtype=np.float32)
         accel = np.array(ctx.read_component("drone.accel"), dtype=np.float32)
         mag = np.array(ctx.read_component("drone.magnetometer"), dtype=np.float32)
 
-        ctx.write_component("aleph.gyro", gyro)
-        ctx.write_component("aleph.accel", accel)
-        ctx.write_component("aleph.mag", mag)
+        ctx.write_component("IMU.gyro", gyro)
+        ctx.write_component("IMU.accel", accel)
+        ctx.write_component("IMU.mag", mag)
     except RuntimeError:
         pass  # first few ticks may not have sensor data yet
 
@@ -174,7 +174,7 @@ print(f"Simulation rate: {config.simulation_rate:.0f} Hz (inner: {1/config.fast_
 print(f"Duration: {config.simulation_time:.0f} s")
 print()
 print("Data flows through the DB -- same code path as real hardware.")
-print('  Bridge reads: "aleph" entity (gyro/accel/mag)')
+print('  Bridge reads: "IMU" entity (gyro/accel/mag)')
 print('  Bridge writes: "ardupilot" entity (motor_command/motor_pwm)')
 print()
 print("Deploy sim-hitl config to the Aleph:")

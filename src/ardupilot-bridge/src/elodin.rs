@@ -2,7 +2,7 @@
 ///
 /// Sensor data arrives from the STM32 via serial-bridge into Elodin-DB
 /// under several vtable namespaces:
-///   "aleph"     -- IMU/baro/mag from on-board sensors (BMI270, BMP581, BMM350)
+///   "IMU"       -- gyro/accel/mag from on-board sensors (BMI270, BMM350) at ~1500 Hz
 ///   "M10Q"      -- GPS from u-blox M10 via STM32 USART2 (J7 connector)
 ///   "QMC5883L"  -- External compass from QMC5883L via STM32 I2C4 (J7 connector)
 ///
@@ -12,9 +12,9 @@ use db_macros::{AsVTable, Metadatatize};
 use impeller2::types::{LenPacket, PacketId, Timestamp};
 use zerocopy::{Immutable, IntoBytes, KnownLayout, TryFromBytes};
 
-/// IMU sensor data from the on-board BMI270/BMM350.
+/// IMU sensor data from the on-board BMI270/BMM350 (~1500 Hz).
 #[derive(AsVTable, Default, Debug, Clone, TryFromBytes, Immutable, KnownLayout)]
-#[db(parent = "aleph")]
+#[db(parent = "IMU")]
 pub struct SensorInput {
     pub mag: [f32; 3],
     pub gyro: [f32; 3],
@@ -22,10 +22,12 @@ pub struct SensorInput {
 }
 
 /// GPS data from the Mateksys M10Q-5883 u-blox receiver.
-/// Field names map to DB components: M10Q.lat, M10Q.lon, etc.
 /// All values use raw UBX-NAV-PVT integer units.
+/// repr(C, packed) ensures the struct layout matches the DB wire format
+/// exactly -- no alignment padding between fields of different sizes.
 #[derive(AsVTable, Default, Debug, Clone, TryFromBytes, Immutable, KnownLayout)]
 #[db(parent = "M10Q")]
+#[repr(C, packed)]
 pub struct M10QInput {
     pub lat: i32,              // 1e-7 degrees
     pub lon: i32,              // 1e-7 degrees
@@ -40,21 +42,16 @@ pub struct M10QInput {
     pub ground_speed: u32,     // mm/s
     pub heading_motion: i32,   // 1e-5 degrees
     pub valid_flags: u8,
-    pub ts_us: u64,            // STM32 timestamp (microseconds)
-    #[db(skip)]
-    pub _pad: [u8; 5],
 }
 
 /// External compass data from the QMC5883L on the M10Q-5883 module.
 /// TODO: simulation -- synthesize QMC5883L data from sim world state for HITL testing.
 #[derive(AsVTable, Default, Debug, Clone, TryFromBytes, Immutable, KnownLayout)]
 #[db(parent = "QMC5883L")]
+#[repr(C, packed)]
 pub struct QMC5883LInput {
     pub mag: [i16; 3],         // raw magnetometer LSB
     pub status: u8,
-    pub ts_us: u64,            // STM32 timestamp (microseconds)
-    #[db(skip)]
-    pub _pad: u8,
 }
 
 /// Motor command telemetry written back to Elodin-DB.
