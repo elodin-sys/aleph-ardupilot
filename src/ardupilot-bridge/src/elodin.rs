@@ -41,6 +41,7 @@ pub struct M10QInput {
     pub heading_motion: i32,   // 1e-5 degrees
     pub valid_flags: u8,
     pub ts_us: u64,            // STM32 timestamp (microseconds)
+    #[db(skip)]
     pub _pad: [u8; 5],
 }
 
@@ -52,6 +53,7 @@ pub struct QMC5883LInput {
     pub mag: [i16; 3],         // raw magnetometer LSB
     pub status: u8,
     pub ts_us: u64,            // STM32 timestamp (microseconds)
+    #[db(skip)]
     pub _pad: u8,
 }
 
@@ -64,6 +66,7 @@ pub struct MotorTelemetry {
     pub time: i64,
     pub motor_command: [f32; 4],
     pub motor_pwm: [u16; 4],
+    #[db(skip)]
     pub _pad: [u8; 0],
 }
 
