@@ -358,6 +358,7 @@
         enable = true;
         model = "JSON";
         homeLocation = "37.7749,-122.4194,10,270";
+        defaultsFile = ./src/ardupilot-defaults.param;
         extraFlags = [ "--serial0" "udpclient:192.168.4.182:14550" ];
       };
 
@@ -368,7 +369,7 @@
       services.ardupilot-bridge = {
         enable = true;
         elodinAddr = "192.168.4.182:2240";
-        hitlPort = 9100;
+        hitlPort = 0;  # disabled -- avoids UDP socket leak on bridge retry
       };
 
       environment.systemPackages = with pkgs; [

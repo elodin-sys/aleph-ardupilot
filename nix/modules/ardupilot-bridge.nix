@@ -51,6 +51,8 @@ in
       description = "ArduPilot Bridge - Elodin-DB to ArduPilot SITL";
       after = [ "network.target" "elodin-db-default.service" "arducopter.service" ];
       wantedBy = [ "multi-user.target" ];
+      stopIfChanged = false;
+      restartIfChanged = false;
 
       environment = {
         ELODIN_DB_ADDR = cfg.elodinAddr;
@@ -69,6 +71,16 @@ in
         StandardOutput = "journal";
         StandardError = "journal";
       };
+    };
+
+    system.activationScripts.restartArdupilotBridge = {
+      text = ''
+        if [ -d /run/systemd/system ] && \
+           /run/current-system/sw/bin/systemctl is-active --quiet ardupilot-bridge.service 2>/dev/null; then
+          echo "restarting ardupilot-bridge for fresh state..."
+          /run/current-system/sw/bin/systemctl restart ardupilot-bridge.service || true
+        fi
+      '';
     };
   };
 }

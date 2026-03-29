@@ -51,8 +51,11 @@ in
       description = "ArduCopter SITL Flight Controller";
       after = [ "network.target" ];
       wantedBy = [ "multi-user.target" ];
+      stopIfChanged = false;
+      restartIfChanged = false;
 
       serviceConfig = {
+        ExecStartPre = "${pkgs.coreutils}/bin/rm -f ${cfg.workingDirectory}/eeprom.bin";
         ExecStart = concatStringsSep " " ([
           "${pkgs.arducopter-sitl}/bin/arducopter"
           "--model" cfg.model
@@ -68,6 +71,16 @@ in
         StandardOutput = "journal";
         StandardError = "journal";
       };
+    };
+
+    system.activationScripts.restartArducopter = {
+      text = ''
+        if [ -d /run/systemd/system ] && \
+           /run/current-system/sw/bin/systemctl is-active --quiet arducopter.service 2>/dev/null; then
+          echo "restarting arducopter for fresh parameter state..."
+          /run/current-system/sw/bin/systemctl restart arducopter.service || true
+        fi
+      '';
     };
   };
 }

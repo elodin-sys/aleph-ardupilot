@@ -110,7 +110,7 @@ def advance_sensor_tick(tick: SensorTick) -> SensorTick:
 
 @el.map
 def update_gyro_noise(tick: SensorTick, bias: GyroBias) -> GyroBias:
-    dt = Config.GLOBAL.fast_loop_time_step
+    dt = Config.GLOBAL.dt
     return gyro_noise.drift_bias(bias, tick, dt)
 
 
@@ -122,7 +122,7 @@ def gyro_system(
     delay: GyroLPFDelay,
     bias: GyroBias,
 ) -> tuple[GyroLPFDelay, Gyro]:
-    dt = Config.GLOBAL.fast_loop_time_step
+    dt = Config.GLOBAL.dt
     body_v = p.angular().inverse() @ v.angular()
     if Config.GLOBAL.sensor_noise:
         body_v = gyro_noise.sample(body_v, bias, tick)
@@ -139,7 +139,7 @@ def accel_system(
     delay: AccelLPFDelay,
     bias: AccelBias,
 ) -> tuple[AccelLPFDelay, Accel]:
-    dt = Config.GLOBAL.fast_loop_time_step
+    dt = Config.GLOBAL.dt
     body_a = p.angular().inverse() @ (a.linear() + jnp.array([0, 0, 9.81]))
 
     # The ground constraint clamps position/velocity but doesn't generate a
@@ -165,7 +165,7 @@ def mag_system(
     bias: MagnetometerBias,
     prev_mag: Magnetometer,
 ) -> Magnetometer:
-    dt = Config.GLOBAL.fast_loop_time_step
+    dt = Config.GLOBAL.dt
     data_rate = 1.0 / 100.0
     tick_rate = round(data_rate / dt)
     body_mag_ref = p.angular().inverse() @ jnp.array([0.0, 1.0, 0.0])

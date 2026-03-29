@@ -72,7 +72,6 @@ class Config:
     motor_thrust_curve_path: str
     frame: Frame
     simulation_rate: float
-    fast_loop_time_step: float
     simulation_time: float
     sensor_noise: bool
 
@@ -153,8 +152,7 @@ DEFAULT_CONFIG = Config(
     ]),
     motor_thrust_curve_path="./motor_thrust_curve.csv",
     simulation_rate=450.0,
-    fast_loop_time_step=1.0 / 900.0,
-    simulation_time=60.0,
+    simulation_time=3600.0,
     sensor_noise=True,
     frame=Frame.QUAD_X,
 )

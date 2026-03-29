@@ -127,7 +127,7 @@ def motor_thrust_response(
     pwm: MotorPwm, prev_thrust: Thrust, prev_torque: Torque, prev_rpm: MotorRpm
 ) -> tuple[Thrust, Torque, MotorRpm]:
     """RPM-based motor dynamics from the thrust curve CSV."""
-    dt = Config.GLOBAL.fast_loop_time_step
+    dt = Config.GLOBAL.dt
     pwm_ref, thrust_ref, torque_ref, rpm_ref = Config.GLOBAL.thrust_curve()
     _, _, yaw_factor, _ = (
         np.array([np.zeros(4), np.zeros(4), Config.GLOBAL.frame.yaw_factor, np.ones(4)])
@@ -212,26 +212,10 @@ def ground_constraint(pos: el.WorldPos, vel: el.WorldVel) -> tuple[el.WorldPos, 
 # ---------------------------------------------------------------------------
 
 
-def inner_loop(run_count: int, system: el.System) -> el.System:
-    out = system
-    for _ in range(run_count - 1):
-        out = out | system
-    return out
-
-
 def system() -> el.System:
     effectors = gravity | drag | motor_thrust_response | body_thrust_system | apply_body_forces
-
-    inner_run_count = round(Config.GLOBAL.dt / Config.GLOBAL.fast_loop_time_step)
-
-    inner = inner_loop(
-        inner_run_count,
-        el.six_dof(
-            Config.GLOBAL.fast_loop_time_step,
-            effectors,
-            integrator=el.Integrator.SemiImplicit,
-        )
-        | sensors.imu,
+    return (
+        el.six_dof(Config.GLOBAL.dt, effectors, integrator=el.Integrator.SemiImplicit)
+        | sensors.imu
+        | ground_constraint
     )
-
-    return inner | ground_constraint

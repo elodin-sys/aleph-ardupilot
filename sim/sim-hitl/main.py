@@ -252,7 +252,7 @@ sim_system = system() | gps_system
 print("ArduPilot sim-HITL Simulation")
 print("=============================")
 print(f"Mass: {config.mass:.1f} kg")
-print(f"Simulation rate: {config.simulation_rate:.0f} Hz (inner: {1/config.fast_loop_time_step:.0f} Hz)")
+print(f"Simulation rate: {config.simulation_rate:.0f} Hz")
 print(f"GPS: {config.gps_rate:.0f} Hz, boot delay {config.gps_boot_delay:.0f}s, "
       f"hacc {config.gps_hacc_std:.1f}m, vacc {config.gps_vacc_std:.1f}m")
 print(f"Home: {config.home_lat:.4f}, {config.home_lon:.4f}, {config.home_alt:.0f}m")
