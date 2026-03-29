@@ -81,9 +81,9 @@ class Config:
     home_lon: float = -122.4194
     home_alt: float = 10.0
     gps_rate: float = 5.0
-    gps_hacc_std: float = 1.3       # SAM-M10Q CEP 1.5 m -> ~1.3 m 1-sigma
-    gps_vacc_std: float = 2.0
-    gps_sacc_std: float = 0.05      # SAM-M10Q velocity accuracy 0.05 m/s
+    gps_hacc_std: float = 2.0       # HW M10Q observed ~2.0 m lat/lon std
+    gps_vacc_std: float = 3.0       # HW M10Q observed ~5 m alt std (multipath)
+    gps_sacc_std: float = 0.065     # HW M10Q observed ~62 mm/s vel_ned std
     gps_boot_delay: float = 2.0     # seconds before first fix
     gps_warmup_samples: int = 10    # noise-free fixes after boot
 

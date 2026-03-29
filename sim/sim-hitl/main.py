@@ -26,7 +26,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from config import DEFAULT_CONFIG, Config
-from gps import GPS, gps as gps_system
+from gps import GPS, WGS84_A, gps as gps_system
 from sensors import IMU
 from sim import Drone, system
 
@@ -125,6 +125,8 @@ world.schematic(
 
 _last_print = [0.0]
 _start_time = [None]
+_gps_rng = np.random.default_rng(42)
+_home_lat_rad = math.radians(config.home_lat)
 
 
 def post_step(tick: int, ctx: el.StepContext):
@@ -146,8 +148,9 @@ def post_step(tick: int, ctx: el.StepContext):
     except RuntimeError:
         pass
 
-    # --- GPS: drone (f64) -> M10Q entity (UBX integer format) ---
-    # Only write when the GPS system has produced a new fix (gps_set == 1).
+    # --- GPS: drone (f64 truth) -> noise -> M10Q entity (UBX integers) ---
+    # Noise is injected here using numpy PRNG (not JAX) so each fix gets
+    # an independent random draw.
     try:
         gps_set_raw = np.array(ctx.read_component("drone.gps_set"))
         gps_set_val = int(gps_set_raw.flat[0])
@@ -156,12 +159,25 @@ def post_step(tick: int, ctx: el.StepContext):
 
     if gps_set_val:
         try:
-            lat = float(np.array(ctx.read_component("drone.gps_lat")).flat[0])
-            lon = float(np.array(ctx.read_component("drone.gps_lon")).flat[0])
-            alt = float(np.array(ctx.read_component("drone.gps_alt_msl")).flat[0])
-            vel = np.array(ctx.read_component("drone.gps_vel_ned"), dtype=np.float64).flatten()
-            gs = float(np.array(ctx.read_component("drone.gps_ground_speed")).flat[0])
-            hdg = float(np.array(ctx.read_component("drone.gps_heading")).flat[0])
+            lat_truth = float(np.array(ctx.read_component("drone.gps_lat")).flat[0])
+            lon_truth = float(np.array(ctx.read_component("drone.gps_lon")).flat[0])
+            alt_truth = float(np.array(ctx.read_component("drone.gps_alt_msl")).flat[0])
+            vel_truth = np.array(ctx.read_component("drone.gps_vel_ned"), dtype=np.float64).flatten()
+
+            # Per-fix Gaussian noise matching M10Q observed characteristics
+            pos_noise_m = _gps_rng.normal(0, config.gps_hacc_std, size=2)
+            alt_noise_m = _gps_rng.normal(0, config.gps_vacc_std)
+            vel_noise_ms = _gps_rng.normal(0, config.gps_sacc_std, size=3)
+
+            lat = lat_truth + pos_noise_m[0] / WGS84_A * (180.0 / math.pi)
+            lon = lon_truth + pos_noise_m[1] / (WGS84_A * math.cos(_home_lat_rad)) * (180.0 / math.pi)
+            alt = alt_truth + alt_noise_m
+            vel = vel_truth + vel_noise_ms
+
+            gs = math.sqrt(vel[0] ** 2 + vel[1] ** 2)
+            hdg = math.degrees(math.atan2(vel[1], vel[0]))
+            if hdg < 0:
+                hdg += 360.0
 
             lat_e7 = int(round(lat * 1e7))
             lon_e7 = int(round(lon * 1e7))

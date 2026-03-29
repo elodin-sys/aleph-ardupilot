@@ -141,6 +141,16 @@ def accel_system(
 ) -> tuple[AccelLPFDelay, Accel]:
     dt = Config.GLOBAL.fast_loop_time_step
     body_a = p.angular().inverse() @ (a.linear() + jnp.array([0, 0, 9.81]))
+
+    # The ground constraint clamps position/velocity but doesn't generate a
+    # normal force, so WorldAccel on the ground is just gravity and the +9.81
+    # correction cancels it to ~0.  A real accelerometer reads the support
+    # force, which is +9.81 m/s^2 upward in body frame for a stationary drone.
+    z = p.linear()[2]
+    on_ground = z < 0.02
+    gravity_body = p.angular().inverse() @ jnp.array([0.0, 0.0, 9.81])
+    body_a = jnp.where(on_ground, gravity_body, body_a)
+
     if Config.GLOBAL.sensor_noise:
         body_a = accel_noise.sample(body_a, bias, tick)
     lpf = flt.BiquadLPF(INS_ACCEL_FILTER, 1.0 / dt)
