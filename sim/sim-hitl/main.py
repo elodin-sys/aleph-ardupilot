@@ -20,8 +20,11 @@ import math
 import os
 import shutil
 import time
+import typing as ty
+from dataclasses import dataclass, field
 
 import elodin as el
+import jax
 import jax.numpy as jnp
 import numpy as np
 
@@ -38,6 +41,100 @@ config = DEFAULT_CONFIG
 config.set_as_global()
 
 DB_PATH = "/tmp/sim-hitl-db"
+
+# ---------------------------------------------------------------------------
+# Bridge-facing output schemas (must match ardupilot-bridge Rust structs)
+# ---------------------------------------------------------------------------
+
+SensorMag = ty.Annotated[
+    jax.Array,
+    el.Component("mag", el.ComponentType(el.PrimitiveType.F32, (3,))),
+]
+SensorGyro = ty.Annotated[
+    jax.Array,
+    el.Component("gyro", el.ComponentType(el.PrimitiveType.F32, (3,))),
+]
+SensorAccel = ty.Annotated[
+    jax.Array,
+    el.Component("accel", el.ComponentType(el.PrimitiveType.F32, (3,))),
+]
+
+M10QLat = ty.Annotated[
+    jax.Array,
+    el.Component("lat", el.ComponentType(el.PrimitiveType.I32, (1,))),
+]
+M10QLon = ty.Annotated[
+    jax.Array,
+    el.Component("lon", el.ComponentType(el.PrimitiveType.I32, (1,))),
+]
+M10QAltMsl = ty.Annotated[
+    jax.Array,
+    el.Component("alt_msl", el.ComponentType(el.PrimitiveType.I32, (1,))),
+]
+M10QAltWgs84 = ty.Annotated[
+    jax.Array,
+    el.Component("alt_wgs84", el.ComponentType(el.PrimitiveType.I32, (1,))),
+]
+M10QVelNed = ty.Annotated[
+    jax.Array,
+    el.Component("vel_ned", el.ComponentType(el.PrimitiveType.I32, (3,))),
+]
+M10QFixType = ty.Annotated[
+    jax.Array,
+    el.Component("fix_type", el.ComponentType(el.PrimitiveType.U8, (1,))),
+]
+M10QSatellites = ty.Annotated[
+    jax.Array,
+    el.Component("satellites", el.ComponentType(el.PrimitiveType.U8, (1,))),
+]
+M10QHAcc = ty.Annotated[
+    jax.Array,
+    el.Component("h_acc", el.ComponentType(el.PrimitiveType.U32, (1,))),
+]
+M10QVAcc = ty.Annotated[
+    jax.Array,
+    el.Component("v_acc", el.ComponentType(el.PrimitiveType.U32, (1,))),
+]
+M10QSAcc = ty.Annotated[
+    jax.Array,
+    el.Component("s_acc", el.ComponentType(el.PrimitiveType.U32, (1,))),
+]
+M10QGroundSpeed = ty.Annotated[
+    jax.Array,
+    el.Component("ground_speed", el.ComponentType(el.PrimitiveType.U32, (1,))),
+]
+M10QHeadingMotion = ty.Annotated[
+    jax.Array,
+    el.Component("heading_motion", el.ComponentType(el.PrimitiveType.I32, (1,))),
+]
+M10QValidFlags = ty.Annotated[
+    jax.Array,
+    el.Component("valid_flags", el.ComponentType(el.PrimitiveType.U8, (1,))),
+]
+
+
+@dataclass
+class SensorOutput(el.Archetype):
+    mag: SensorMag = field(default_factory=lambda: jnp.zeros(3, dtype=jnp.float32))
+    gyro: SensorGyro = field(default_factory=lambda: jnp.zeros(3, dtype=jnp.float32))
+    accel: SensorAccel = field(default_factory=lambda: jnp.zeros(3, dtype=jnp.float32))
+
+
+@dataclass
+class M10QOutput(el.Archetype):
+    lat: M10QLat = field(default_factory=lambda: jnp.zeros(1, dtype=jnp.int32))
+    lon: M10QLon = field(default_factory=lambda: jnp.zeros(1, dtype=jnp.int32))
+    alt_msl: M10QAltMsl = field(default_factory=lambda: jnp.zeros(1, dtype=jnp.int32))
+    alt_wgs84: M10QAltWgs84 = field(default_factory=lambda: jnp.zeros(1, dtype=jnp.int32))
+    vel_ned: M10QVelNed = field(default_factory=lambda: jnp.zeros(3, dtype=jnp.int32))
+    fix_type: M10QFixType = field(default_factory=lambda: jnp.zeros(1, dtype=jnp.uint8))
+    satellites: M10QSatellites = field(default_factory=lambda: jnp.zeros(1, dtype=jnp.uint8))
+    h_acc: M10QHAcc = field(default_factory=lambda: jnp.zeros(1, dtype=jnp.uint32))
+    v_acc: M10QVAcc = field(default_factory=lambda: jnp.zeros(1, dtype=jnp.uint32))
+    s_acc: M10QSAcc = field(default_factory=lambda: jnp.zeros(1, dtype=jnp.uint32))
+    ground_speed: M10QGroundSpeed = field(default_factory=lambda: jnp.zeros(1, dtype=jnp.uint32))
+    heading_motion: M10QHeadingMotion = field(default_factory=lambda: jnp.zeros(1, dtype=jnp.int32))
+    valid_flags: M10QValidFlags = field(default_factory=lambda: jnp.zeros(1, dtype=jnp.uint8))
 
 # ---------------------------------------------------------------------------
 # World
@@ -62,8 +159,8 @@ drone = world.spawn(
 # "IMU"       -- gyro/accel/mag in f32 (same schema as serial-bridge writes)
 # "M10Q"      -- GPS in UBX integer format (same schema as serial-bridge writes)
 # "ardupilot" -- motor data the bridge writes back (MotorTelemetry)
-imu = world.spawn([], name="IMU")
-m10q = world.spawn([], name="M10Q")
+imu = world.spawn([SensorOutput()], name="IMU")
+m10q = world.spawn([M10QOutput()], name="M10Q")
 ardupilot = world.spawn([], name="ardupilot")
 
 # ---------------------------------------------------------------------------
@@ -83,9 +180,9 @@ world.schematic(
             }
         }
         vsplit name="Sensors" {
-            graph "drone.gyro" name="Gyroscope f64 (physics)"
+            graph "drone.sim_gyro" name="Gyroscope f64 (physics)"
             graph "IMU.gyro" name="Gyroscope f32 (to bridge)"
-            graph "drone.accel" name="Accelerometer (physics)"
+            graph "drone.sim_accel" name="Accelerometer (physics)"
             graph "drone.magnetometer" name="Magnetometer (physics)"
         }
         vsplit name="GPS" {
@@ -138,8 +235,8 @@ def post_step(tick: int, ctx: el.StepContext):
 
     # --- IMU: drone (f64) -> IMU entity (f32) ---
     try:
-        gyro = np.array(ctx.read_component("drone.gyro"), dtype=np.float32)
-        accel = np.array(ctx.read_component("drone.accel"), dtype=np.float32)
+        gyro = np.array(ctx.read_component("drone.sim_gyro"), dtype=np.float32)
+        accel = np.array(ctx.read_component("drone.sim_accel"), dtype=np.float32)
         mag = np.array(ctx.read_component("drone.magnetometer"), dtype=np.float32)
 
         ctx.write_component("IMU.gyro", gyro)

@@ -20,7 +20,7 @@ SensorTick = ty.Annotated[jax.Array, el.Component("sensor_tick", el.ComponentTyp
 Gyro = ty.Annotated[
     jax.Array,
     el.Component(
-        "gyro",
+        "sim_gyro",
         el.ComponentType(el.PrimitiveType.F64, (3,)),
         metadata={"priority": 90, "element_names": "x,y,z"},
     ),
@@ -37,7 +37,7 @@ GyroLPFDelay = ty.Annotated[
 Accel = ty.Annotated[
     jax.Array,
     el.Component(
-        "accel",
+        "sim_accel",
         el.ComponentType(el.PrimitiveType.F64, (3,)),
         metadata={"priority": 89, "element_names": "x,y,z"},
     ),
