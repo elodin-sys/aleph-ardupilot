@@ -54,6 +54,16 @@ pub struct QMC5883LInput {
     pub status: u8,
 }
 
+/// MEKF attitude estimate from the Elodin MEKF running on the Aleph.
+/// The quaternion is scalar-last [x, y, z, w] in the ENU/FLU frame.
+/// Used to provide ArduPilot SITL with a consistent attitude reference
+/// for its internal compass simulation and EKF initialization.
+#[derive(AsVTable, Default, Debug, Clone, TryFromBytes, Immutable, KnownLayout)]
+#[db(parent = "aleph")]
+pub struct MekfInput {
+    pub q_hat: [f64; 4],
+}
+
 /// Motor command telemetry written back to Elodin-DB.
 #[derive(AsVTable, Metadatatize, IntoBytes, Immutable, Debug)]
 #[db(parent = "ardupilot")]

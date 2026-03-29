@@ -50,6 +50,34 @@ pub fn quat_enu_to_ned_wxyz(xyzw: [f64; 4]) -> [f64; 4] {
 }
 
 // ---------------------------------------------------------------------------
+// MEKF quaternion -> ArduPilot Euler attitude
+// ---------------------------------------------------------------------------
+
+/// Convert MEKF quaternion (scalar-last [x,y,z,w], ENU/FLU frame) to
+/// ArduPilot NED/FRD Euler angles [roll, pitch, yaw] in radians.
+///
+/// Steps:
+///   1. Reorder scalar-last -> scalar-first and apply ENU->NED frame transform
+///   2. Extract Euler angles from the NED quaternion
+pub fn mekf_quat_to_euler_ned(xyzw: [f64; 4]) -> [f64; 3] {
+    let [w, x, y, z] = quat_enu_to_ned_wxyz(xyzw);
+
+    // Tait-Bryan ZYX (aerospace convention) from scalar-first quaternion
+    let sinr_cosp = 2.0 * (w * x + y * z);
+    let cosr_cosp = 1.0 - 2.0 * (x * x + y * y);
+    let roll = sinr_cosp.atan2(cosr_cosp);
+
+    let sinp = (2.0 * (w * y - z * x)).clamp(-1.0, 1.0);
+    let pitch = sinp.asin();
+
+    let siny_cosp = 2.0 * (w * z + x * y);
+    let cosy_cosp = 1.0 - 2.0 * (y * y + z * z);
+    let yaw = siny_cosp.atan2(cosy_cosp);
+
+    [roll, pitch, yaw]
+}
+
+// ---------------------------------------------------------------------------
 // GPS coordinate conversions (raw UBX integer units -> ArduPilot NED)
 // ---------------------------------------------------------------------------
 
