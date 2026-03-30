@@ -12,9 +12,9 @@ use crate::config::{Config, HomeLocation};
 use crate::coordinate::{
     gyro_flu_to_frd, accel_flu_to_frd,
     ubx_lla_to_ned, ubx_vel_to_ms, ubx_heading_to_rad,
-    mekf_quat_to_euler_ned, blend_angle,
+    qmc_raw_to_gauss,
 };
-use crate::elodin::{M10QInput, MekfInput, MotorTelemetry, SensorInput};
+use crate::elodin::{M10QInput, QMC5883LInput, MotorTelemetry, SensorInput};
 use crate::imu_filter::ConingIntegrator;
 
 use anyhow::Context;
@@ -86,19 +86,19 @@ impl Default for ImuCache {
     }
 }
 
-/// Cached MEKF attitude, updated by the MEKF subscription task at ~500 Hz.
-/// Provides ArduPilot SITL with a sensor-fused attitude reference from the
-/// real BMI270 + BMM350, which drives the SITL's internal compass simulation.
+/// Cached QMC5883L magnetometer reading, updated by the mag subscription
+/// task at ~100-200 Hz. Used with the IMU accelerometer to compute a
+/// tilt-compensated compass attitude for ArduPilot SITL.
 #[derive(Debug, Clone, Copy)]
-struct AttitudeCache {
-    euler_ned: [f64; 3],  // [roll, pitch, yaw] in NED/FRD radians
+struct MagCache {
+    mag_frd: [f64; 3],   // body-frame FRD magnetic field in Gauss
     valid: bool,
 }
 
-impl Default for AttitudeCache {
+impl Default for MagCache {
     fn default() -> Self {
         Self {
-            euler_ned: [0.0; 3],
+            mag_frd: [0.0; 3],
             valid: false,
         }
     }
@@ -123,9 +123,8 @@ async fn run() -> anyhow::Result<()> {
         .unwrap();
     let udp_socket = UdpSocket::bind(bind_addr)
         .context("bind UDP control port")?;
-    udp_socket
-        .set_read_timeout(Some(Duration::from_millis(100)))
-        .ok();
+    udp_socket.set_nonblocking(true)
+        .context("set UDP non-blocking")?;
 
     let mut can = CanOutput::new(&config.can_interface);
     can.open().context("open CAN interface")?;
@@ -160,14 +159,14 @@ async fn run() -> anyhow::Result<()> {
         });
     }
 
-    // MEKF attitude subscription -- background thread, ~500 Hz.
-    let attitude_cache = Arc::new(Mutex::new(AttitudeCache::default()));
+    // QMC5883L magnetometer subscription -- background thread, ~100-200 Hz.
+    let mag_cache = Arc::new(Mutex::new(MagCache::default()));
     {
-        let attitude_cache = Arc::clone(&attitude_cache);
+        let mag_cache = Arc::clone(&mag_cache);
         let elodin_addr_str = config.elodin_addr.clone();
         std::thread::spawn(move || {
-            if let Err(e) = stellarator::run(move || mekf_task(elodin_addr_str, attitude_cache)) {
-                tracing::error!("MEKF task fatal: {:?}", e);
+            if let Err(e) = stellarator::run(move || qmc5883l_task(elodin_addr_str, mag_cache)) {
+                tracing::error!("QMC5883L task fatal: {:?}", e);
             }
         });
     }
@@ -190,7 +189,7 @@ async fn run() -> anyhow::Result<()> {
         if let Err(err) = bridge_loop(
             &config, telemetry_id,
             &udp_socket, &mut can,
-            &gps_cache, &attitude_cache, &imu_cache,
+            &gps_cache, &mag_cache, &imu_cache,
         ).await {
             tracing::error!("bridge error: {:?}", err);
             stellarator::sleep(Duration::from_millis(500)).await;
@@ -204,7 +203,7 @@ async fn bridge_loop(
     udp_socket: &UdpSocket,
     can: &mut CanOutput,
     gps_cache: &Arc<Mutex<GpsCache>>,
-    attitude_cache: &Arc<Mutex<AttitudeCache>>,
+    mag_cache: &Arc<Mutex<MagCache>>,
     imu_cache: &Arc<Mutex<ImuCache>>,
 ) -> anyhow::Result<()> {
     let elodin_addr: SocketAddr = config
@@ -289,35 +288,27 @@ async fn bridge_loop(
         output_tick += 1;
 
         let gps = gps_cache.lock().unwrap();
-        let (position, velocity, ground_speed_ms) = if gps.has_fix {
-            (gps.position_ned, gps.velocity_ned, gps.ground_speed_ms)
+        let (position, velocity) = if gps.has_fix {
+            (gps.position_ned, gps.velocity_ned)
         } else {
-            ([0.0; 3], [0.0; 3], 0.0)
+            ([0.0; 3], [0.0; 3])
         };
         let gps_yaw = gps.yaw_rad;
         let gps_fix = gps.has_fix;
         drop(gps);
 
-        let att = attitude_cache.lock().unwrap();
-        let attitude = if att.valid {
-            let mekf_yaw = att.euler_ned[2];
-            let yaw = if !gps_fix {
-                mekf_yaw
-            } else if ground_speed_ms > 3.0 {
-                gps_yaw
-            } else if ground_speed_ms > 1.0 {
-                let alpha = (ground_speed_ms - 1.0) / 2.0;
-                blend_angle(mekf_yaw, gps_yaw, alpha)
-            } else {
-                mekf_yaw
-            };
-            [att.euler_ned[0], att.euler_ned[1], yaw]
-        } else if gps_fix {
-            [0.0, 0.0, gps_yaw]
-        } else {
-            [0.0; 3]
-        };
-        drop(att);
+        // Roll/pitch from accelerometer gravity sensing.
+        // Negate sensed force to get gravity direction (positive Z = down in FRD).
+        let gx = -imu.accel[0];
+        let gy = -imu.accel[1];
+        let gz = -imu.accel[2];
+        let roll = gy.atan2(gz);
+        let pitch = (-gx).atan2(gy * roll.sin() + gz * roll.cos());
+
+        // Yaw from GPS heading (avoids QMC5883L axis orientation unknowns).
+        let yaw = if gps_fix { gps_yaw } else { 0.0 };
+
+        let attitude = [roll, pitch, yaw];
 
         let packet = SitlJsonPacket {
             timestamp: imu.timestamp,
@@ -336,24 +327,25 @@ async fn bridge_loop(
             .context("send sensor JSON to ArduPilot")?;
 
         if output_tick % 400 == 0 {
-            let att_c = attitude_cache.lock().unwrap();
+            let mag_c = mag_cache.lock().unwrap();
             let gps_c = gps_cache.lock().unwrap();
             tracing::info!(
-                "out={} raw={} ratio={:.1} gps={} sats={} att=[{:.1},{:.1},{:.1}]deg",
+                "out={} raw={} ratio={:.1} gps={} sats={} att=[{:.1},{:.1},{:.1}]deg mag={:.3}G",
                 output_tick,
                 imu.raw_count,
                 imu.raw_count as f64 / output_tick.max(1) as f64,
                 gps_c.has_fix, gps_c.satellites,
-                att_c.euler_ned[0].to_degrees(),
-                att_c.euler_ned[1].to_degrees(),
-                att_c.euler_ned[2].to_degrees(),
+                attitude[0].to_degrees(),
+                attitude[1].to_degrees(),
+                attitude[2].to_degrees(),
+                (mag_c.mag_frd[0].powi(2) + mag_c.mag_frd[1].powi(2) + mag_c.mag_frd[2].powi(2)).sqrt(),
             );
         }
     }
 }
 
 // ---------------------------------------------------------------------------
-// Background tasks: GPS and MEKF subscriptions
+// Background tasks: IMU, GPS, and QMC5883L subscriptions
 // ---------------------------------------------------------------------------
 
 /// IMU subscription task. Runs in a dedicated thread with its own stellarator
@@ -511,51 +503,50 @@ async fn gps_subscribe_loop(
     }
 }
 
-/// MEKF attitude subscription task. Reconnects on error.
-/// Subscribes to aleph.q_hat (quaternion from the Elodin MEKF) and converts
-/// to NED Euler angles for the SITL attitude field.
-async fn mekf_task(
+/// QMC5883L magnetometer subscription task. Reconnects on error.
+/// Subscribes to QMC5883L.mag (raw i16 LSB) and converts to body-frame
+/// Gauss values for tilt-compensated compass computation.
+async fn qmc5883l_task(
     elodin_addr: String,
-    cache: Arc<Mutex<AttitudeCache>>,
+    cache: Arc<Mutex<MagCache>>,
 ) -> anyhow::Result<()> {
     loop {
-        match mekf_subscribe_loop(&elodin_addr, &cache).await {
+        match qmc5883l_subscribe_loop(&elodin_addr, &cache).await {
             Ok(()) => {}
             Err(e) => {
-                tracing::warn!("MEKF subscription error (will retry): {}", e);
+                tracing::warn!("QMC5883L subscription error (will retry): {}", e);
                 stellarator::sleep(Duration::from_secs(2)).await;
             }
         }
     }
 }
 
-async fn mekf_subscribe_loop(
+async fn qmc5883l_subscribe_loop(
     elodin_addr: &str,
-    cache: &Arc<Mutex<AttitudeCache>>,
+    cache: &Arc<Mutex<MagCache>>,
 ) -> anyhow::Result<()> {
-    let addr: SocketAddr = elodin_addr.parse().context("parse elodin addr for MEKF")?;
+    let addr: SocketAddr = elodin_addr.parse().context("parse elodin addr for QMC5883L")?;
     let mut client = Client::connect(addr).await.map_err(anyhow::Error::from)?;
-    let mut sub = client.subscribe::<MekfInput>().await?;
-    tracing::info!("MEKF: subscribed to aleph.q_hat");
+    let mut sub = client.subscribe::<QMC5883LInput>().await?;
+    tracing::info!("QMC5883L: subscribed to QMC5883L vtable");
 
-    let mut mekf_tick: u64 = 0;
+    let mut mag_tick: u64 = 0;
     loop {
-        let mekf = sub.next().await?;
-        let euler_ned = mekf_quat_to_euler_ned(mekf.q_hat);
+        let input = sub.next().await?;
+        let mag_gauss = qmc_raw_to_gauss(input.mag);
 
         {
             let mut c = cache.lock().unwrap();
-            c.euler_ned = euler_ned;
+            c.mag_frd = mag_gauss;
             c.valid = true;
         }
 
-        mekf_tick += 1;
-        if mekf_tick % 500 == 1 {
+        mag_tick += 1;
+        if mag_tick % 200 == 1 {
+            let magnitude = (mag_gauss[0].powi(2) + mag_gauss[1].powi(2) + mag_gauss[2].powi(2)).sqrt();
             tracing::info!(
-                "MEKF: roll={:.1} pitch={:.1} yaw={:.1} deg",
-                euler_ned[0].to_degrees(),
-                euler_ned[1].to_degrees(),
-                euler_ned[2].to_degrees(),
+                "MAG: raw=[{:.4},{:.4},{:.4}] |B|={:.4} G",
+                mag_gauss[0], mag_gauss[1], mag_gauss[2], magnitude,
             );
         }
     }

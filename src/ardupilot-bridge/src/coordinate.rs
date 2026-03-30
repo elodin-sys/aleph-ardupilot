@@ -32,47 +32,55 @@ pub fn accel_flu_to_frd(flu: [f64; 3]) -> [f64; 3] {
     flu_to_frd(flu)
 }
 
-/// Convert quaternion from Elodin convention (scalar-last [x,y,z,w])
-/// to ArduPilot convention (scalar-first [w,x,y,z]), with ENU->NED rotation.
-///
-/// The ENU->NED rotation is a 180-degree rotation about the body X axis
-/// followed by a 90-degree rotation about the Z axis. In practice, for
-/// quaternion attitude representation:
-///   q_ned = R_enu_to_ned * q_enu
-///
-/// For the SITL JSON interface, ArduPilot accepts roll/pitch/yaw in radians
-/// rather than quaternions, so this may not be needed initially.
-pub fn quat_enu_to_ned_wxyz(xyzw: [f64; 4]) -> [f64; 4] {
-    // Reorder scalar-last to scalar-first, then apply frame transform.
-    // ENU->NED quaternion mapping: swap x<->y, negate z, keep w.
-    let [x, y, z, w] = xyzw;
-    [w, y, x, -z]
+// ---------------------------------------------------------------------------
+// QMC5883L magnetometer conversions
+// ---------------------------------------------------------------------------
+
+const QMC5883L_LSB_PER_GAUSS: f64 = 3000.0; // ±8G range sensitivity
+
+/// Convert raw QMC5883L i16 LSB readings to Gauss.
+pub fn qmc_raw_to_gauss(raw: [i16; 3]) -> [f64; 3] {
+    [
+        raw[0] as f64 / QMC5883L_LSB_PER_GAUSS,
+        raw[1] as f64 / QMC5883L_LSB_PER_GAUSS,
+        raw[2] as f64 / QMC5883L_LSB_PER_GAUSS,
+    ]
 }
 
 // ---------------------------------------------------------------------------
-// MEKF quaternion -> ArduPilot Euler attitude
+// Tilt-compensated compass attitude
 // ---------------------------------------------------------------------------
 
-/// Convert MEKF quaternion (scalar-last [x,y,z,w], ENU/FLU frame) to
-/// ArduPilot NED/FRD Euler angles [roll, pitch, yaw] in radians.
+/// Compute [roll, pitch, yaw] in NED/FRD radians from accelerometer and
+/// magnetometer readings in body frame.
 ///
-/// Steps:
-///   1. Reorder scalar-last -> scalar-first and apply ENU->NED frame transform
-///   2. Extract Euler angles from the NED quaternion
-pub fn mekf_quat_to_euler_ned(xyzw: [f64; 4]) -> [f64; 3] {
-    let [w, x, y, z] = quat_enu_to_ned_wxyz(xyzw);
+/// The accelerometer input is *sensed force* in FRD (a level drone reads
+/// approximately [0, 0, -9.81]).  The formula internally negates it to get
+/// the gravity direction vector (positive Z = down in FRD) before computing
+/// roll and pitch.
+///
+/// The magnetometer input is in the QMC5883L sensor frame, which is treated
+/// as aligned with FRD for now. The yaw is derived after tilt compensation.
+pub fn tilt_compensated_attitude(accel_frd: [f64; 3], mag: [f64; 3]) -> [f64; 3] {
+    // Negate sensed force to get gravity direction (down = positive Z in FRD).
+    let gx = -accel_frd[0];
+    let gy = -accel_frd[1];
+    let gz = -accel_frd[2];
 
-    // Tait-Bryan ZYX (aerospace convention) from scalar-first quaternion
-    let sinr_cosp = 2.0 * (w * x + y * z);
-    let cosr_cosp = 1.0 - 2.0 * (x * x + y * y);
-    let roll = sinr_cosp.atan2(cosr_cosp);
+    let roll = gy.atan2(gz);
+    let sr = roll.sin();
+    let cr = roll.cos();
 
-    let sinp = (2.0 * (w * y - z * x)).clamp(-1.0, 1.0);
-    let pitch = sinp.asin();
+    let pitch = (-gx).atan2(gy * sr + gz * cr);
+    let sp = pitch.sin();
+    let cp = pitch.cos();
 
-    let siny_cosp = 2.0 * (w * z + x * y);
-    let cosy_cosp = 1.0 - 2.0 * (y * y + z * z);
-    let yaw = siny_cosp.atan2(cosy_cosp);
+    let mx = mag[0] * cp
+           + mag[1] * sr * sp
+           + mag[2] * cr * sp;
+    let my = mag[1] * cr
+           - mag[2] * sr;
+    let yaw = (-my).atan2(mx);
 
     [roll, pitch, yaw]
 }

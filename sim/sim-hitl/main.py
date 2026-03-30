@@ -4,9 +4,10 @@ The ardupilot-bridge (running on the Aleph) connects to this simulation's
 Elodin-DB.  Data flows entirely through the DB -- the same code path as
 real hardware:
 
-    Simulation  -->  "IMU" entity (gyro/accel/mag f32)   -->  bridge subscribes
-    Simulation  -->  "M10Q" entity (GPS UBX integers)    -->  bridge subscribes
-    bridge writes "ardupilot" entity (motor_command)     -->  Simulation reads
+    Simulation  -->  "IMU" entity (gyro/accel/mag f32)       -->  bridge subscribes
+    Simulation  -->  "M10Q" entity (GPS UBX integers)      -->  bridge subscribes
+    Simulation  -->  "QMC5883L" entity (compass i16 LSB)   -->  bridge subscribes
+    bridge writes "ardupilot" entity (motor_command)       -->  Simulation reads
 
 The bridge is completely unaware a simulation is involved -- it sees the
 exact same DB schema as when real hardware sensors are writing.
@@ -146,6 +147,27 @@ class M10QOutput(el.Archetype):
     itow: M10QItow = field(default_factory=lambda: jnp.zeros(1, dtype=jnp.uint32))
     unix_epoch_ms: M10QUnixEpochMs = field(default_factory=lambda: jnp.zeros(1, dtype=jnp.int64))
 
+QMC5883LMag = ty.Annotated[
+    jax.Array,
+    el.Component("mag", el.ComponentType(el.PrimitiveType.I16, (3,))),
+]
+QMC5883LStatus = ty.Annotated[
+    jax.Array,
+    el.Component("status", el.ComponentType(el.PrimitiveType.U8, (1,))),
+]
+
+
+@dataclass
+class QMC5883LOutput(el.Archetype):
+    mag: QMC5883LMag = field(default_factory=lambda: jnp.zeros(3, dtype=jnp.int16))
+    status: QMC5883LStatus = field(default_factory=lambda: jnp.zeros(1, dtype=jnp.uint8))
+
+
+# Earth magnetic field magnitude at San Francisco (~0.48 Gauss).
+# QMC5883L sensitivity at ±2G range: 12000 LSB/Gauss.
+EARTH_FIELD_GAUSS = 0.48
+QMC5883L_LSB_PER_GAUSS = 3000.0
+
 # ---------------------------------------------------------------------------
 # World
 # ---------------------------------------------------------------------------
@@ -168,9 +190,11 @@ drone = world.spawn(
 # Interface entities matching the bridge's VTable namespaces.
 # "IMU"       -- gyro/accel/mag in f32 (same schema as serial-bridge writes)
 # "M10Q"      -- GPS in UBX integer format (same schema as serial-bridge writes)
+# "QMC5883L"  -- external compass in i16 LSB (same schema as serial-bridge writes)
 # "ardupilot" -- motor data the bridge writes back (MotorTelemetry)
 imu = world.spawn([SensorOutput()], name="IMU")
 m10q = world.spawn([M10QOutput()], name="M10Q")
+qmc5883l = world.spawn([QMC5883LOutput()], name="QMC5883L")
 ardupilot = world.spawn([], name="ardupilot")
 
 # ---------------------------------------------------------------------------
@@ -252,6 +276,16 @@ def post_step(tick: int, ctx: el.StepContext):
         ctx.write_component("IMU.gyro", gyro)
         ctx.write_component("IMU.accel", accel)
         ctx.write_component("IMU.mag", mag)
+    except RuntimeError:
+        pass
+
+    # --- QMC5883L: drone magnetometer (f64 unit vector) -> i16 LSB ---
+    try:
+        mag_f64 = np.array(ctx.read_component("drone.magnetometer"), dtype=np.float64).flatten()
+        mag_gauss = mag_f64 * EARTH_FIELD_GAUSS
+        mag_lsb = np.clip(mag_gauss * QMC5883L_LSB_PER_GAUSS, -32768, 32767).astype(np.int16)
+        ctx.write_component("QMC5883L.mag", mag_lsb)
+        ctx.write_component("QMC5883L.status", np.array([0x01], dtype=np.uint8))
     except RuntimeError:
         pass
 
@@ -371,6 +405,7 @@ print()
 print("Data flows through the DB -- same code path as real hardware.")
 print('  Bridge reads: "IMU" entity (gyro/accel/mag)')
 print('  Bridge reads: "M10Q" entity (GPS UBX integers)')
+print('  Bridge reads: "QMC5883L" entity (compass i16 LSB)')
 print('  Bridge writes: "ardupilot" entity (motor_command/motor_pwm)')
 print()
 print("Deploy sim-hitl config to the Aleph:")

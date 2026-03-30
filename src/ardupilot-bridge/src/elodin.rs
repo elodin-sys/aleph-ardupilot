@@ -46,24 +46,15 @@ pub struct M10QInput {
     pub unix_epoch_ms: i64,    // Unix epoch (ms)
 }
 
-/// External compass data from the QMC5883L on the M10Q-5883 module.
-/// TODO: simulation -- synthesize QMC5883L data from sim world state for HITL testing.
+/// External compass data from the QMC5883L on the Mateksys M10Q-5883 module.
+/// Connected via STM32 I2C4 (J7 connector), mounted away from the Orin NX
+/// to minimize magnetic interference.
 #[derive(AsVTable, Default, Debug, Clone, TryFromBytes, Immutable, KnownLayout)]
 #[db(parent = "QMC5883L")]
 #[repr(C, packed)]
 pub struct QMC5883LInput {
-    pub mag: [i16; 3],         // raw magnetometer LSB
+    pub mag: [i16; 3],         // raw magnetometer LSB (12000 LSB/Gauss at ±2G range)
     pub status: u8,
-}
-
-/// MEKF attitude estimate from the Elodin MEKF running on the Aleph.
-/// The quaternion is scalar-last [x, y, z, w] in the ENU/FLU frame.
-/// Used to provide ArduPilot SITL with a consistent attitude reference
-/// for its internal compass simulation and EKF initialization.
-#[derive(AsVTable, Default, Debug, Clone, TryFromBytes, Immutable, KnownLayout)]
-#[db(parent = "aleph")]
-pub struct MekfInput {
-    pub q_hat: [f64; 4],
 }
 
 /// Motor command telemetry written back to Elodin-DB.
