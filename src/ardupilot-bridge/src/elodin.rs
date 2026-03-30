@@ -9,7 +9,7 @@
 /// Motor telemetry is written back as a separate vtable for visualization
 /// in the Elodin Editor.
 use db_macros::{AsVTable, Metadatatize};
-use impeller2::types::{LenPacket, PacketId, Timestamp};
+use impeller2::types::{LenPacket, PacketId};
 use zerocopy::{Immutable, IntoBytes, KnownLayout, TryFromBytes};
 
 /// IMU sensor data from the on-board BMI270/BMM350 (~1500 Hz).
@@ -42,6 +42,8 @@ pub struct M10QInput {
     pub ground_speed: u32,     // mm/s
     pub heading_motion: i32,   // 1e-5 degrees
     pub valid_flags: u8,
+    pub itow: u32,             // GPS time of week (ms)
+    pub unix_epoch_ms: i64,    // Unix epoch (ms)
 }
 
 /// External compass data from the QMC5883L on the M10Q-5883 module.
@@ -78,9 +80,9 @@ pub struct MotorTelemetry {
 }
 
 impl MotorTelemetry {
-    pub fn new(pwm: [u16; 4], normalized: [f32; 4]) -> Self {
+    pub fn new(pwm: [u16; 4], normalized: [f32; 4], time: i64) -> Self {
         Self {
-            time: Timestamp::now().0,
+            time,
             motor_command: normalized,
             motor_pwm: pwm,
             _pad: [],

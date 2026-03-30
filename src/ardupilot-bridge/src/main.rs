@@ -19,7 +19,7 @@ use crate::imu_filter::ConingIntegrator;
 
 use anyhow::Context;
 use clap::Parser;
-use impeller2::types::PacketId;
+use impeller2::types::{PacketId, Timestamp};
 use impeller2_stellar::{Client, SinkExt, StreamExt};
 use std::net::{SocketAddr, UdpSocket};
 use std::sync::{Arc, Mutex};
@@ -40,6 +40,9 @@ struct GpsCache {
     satellites: u8,
     h_acc_m: f64,
     ground_speed_ms: f64,
+    unix_epoch_ms: i64,
+    epoch_us: i64,
+    local_us: i64,
 }
 
 impl Default for GpsCache {
@@ -52,6 +55,9 @@ impl Default for GpsCache {
             satellites: 0,
             h_acc_m: 999.0,
             ground_speed_ms: 0.0,
+            unix_epoch_ms: 0,
+            epoch_us: 0,
+            local_us: 0,
         }
     }
 }
@@ -253,7 +259,18 @@ async fn bridge_loop(
                     }
                 }
 
-                let telemetry = MotorTelemetry::new(motor_pwm, motor_cmd);
+                let local_now_us = Timestamp::now().0;
+                let telemetry_time_us = {
+                    let gps = gps_cache.lock().unwrap();
+                    if gps.epoch_us > 0 {
+                        gps.epoch_us
+                            .saturating_add(local_now_us.saturating_sub(gps.local_us))
+                    } else {
+                        local_now_us
+                    }
+                };
+
+                let telemetry = MotorTelemetry::new(motor_pwm, motor_cmd, telemetry_time_us);
                 let table = telemetry.to_table_packet(telemetry_id);
                 client.send(table).await.0?;
             }
@@ -477,6 +494,11 @@ async fn gps_subscribe_loop(
             c.satellites = gps.satellites;
             c.h_acc_m = h_acc_m;
             c.ground_speed_ms = ground_speed_ms;
+            c.unix_epoch_ms = gps.unix_epoch_ms;
+            if gps.unix_epoch_ms > 0 {
+                c.epoch_us = gps.unix_epoch_ms.saturating_mul(1000);
+                c.local_us = Timestamp::now().0;
+            }
         }
 
         gps_tick += 1;

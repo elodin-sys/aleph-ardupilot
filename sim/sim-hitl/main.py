@@ -111,6 +111,14 @@ M10QValidFlags = ty.Annotated[
     jax.Array,
     el.Component("valid_flags", el.ComponentType(el.PrimitiveType.U8, (1,))),
 ]
+M10QItow = ty.Annotated[
+    jax.Array,
+    el.Component("itow", el.ComponentType(el.PrimitiveType.U32, (1,))),
+]
+M10QUnixEpochMs = ty.Annotated[
+    jax.Array,
+    el.Component("unix_epoch_ms", el.ComponentType(el.PrimitiveType.I64, (1,))),
+]
 
 
 @dataclass
@@ -135,6 +143,8 @@ class M10QOutput(el.Archetype):
     ground_speed: M10QGroundSpeed = field(default_factory=lambda: jnp.zeros(1, dtype=jnp.uint32))
     heading_motion: M10QHeadingMotion = field(default_factory=lambda: jnp.zeros(1, dtype=jnp.int32))
     valid_flags: M10QValidFlags = field(default_factory=lambda: jnp.zeros(1, dtype=jnp.uint8))
+    itow: M10QItow = field(default_factory=lambda: jnp.zeros(1, dtype=jnp.uint32))
+    unix_epoch_ms: M10QUnixEpochMs = field(default_factory=lambda: jnp.zeros(1, dtype=jnp.int64))
 
 # ---------------------------------------------------------------------------
 # World
@@ -299,6 +309,8 @@ def post_step(tick: int, ctx: el.StepContext):
             ctx.write_component("M10Q.ground_speed", np.array([gs_mms], dtype=np.uint32))
             ctx.write_component("M10Q.heading_motion", np.array([hdg_e5], dtype=np.int32))
             ctx.write_component("M10Q.valid_flags", np.array([0x37], dtype=np.uint8))
+            ctx.write_component("M10Q.itow", np.array([int(t * 1000) % 604800000], dtype=np.uint32))
+            ctx.write_component("M10Q.unix_epoch_ms", np.array([int(time.time() * 1000)], dtype=np.int64))
         except RuntimeError:
             pass
 
