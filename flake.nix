@@ -23,8 +23,8 @@
   };
 
   inputs = {
-    aleph.url = "github:elodin-sys/elodin?rev=81ed6860085884beef42d9f87eeeae5b5cfbeff3&dir=aleph";
-    elodin.url = "github:elodin-sys/elodin?rev=81ed6860085884beef42d9f87eeeae5b5cfbeff3";
+    aleph.url = "github:elodin-sys/elodin?rev=4489caae887b49b679417060bca003b7c8b9f354&dir=aleph";
+    elodin.url = "github:elodin-sys/elodin?rev=4489caae887b49b679417060bca003b7c8b9f354";
     flake-utils.follows = "aleph/flake-utils";
     nixpkgs.follows = "aleph/nixpkgs";
 
@@ -196,13 +196,8 @@
         /run/current-system/sw/bin/nvpmodel --force -f /etc/nvpmodel.conf -m 0
       '';
 
-      #########################################################################
-      # Enable the Hello Service (Pattern 3 demonstration)
-      #########################################################################
-      services.hello-service = {
-        enable = true;
-        message = "Hello from Aleph Template Project!";
-        interval = 30;
+      services.serial-bridge = {
+        gpsClockSource = true;
       };
 
       #########################################################################
@@ -347,6 +342,10 @@
       systemd.services.nvpmodel.serviceConfig.ExecStart = lib.mkForce ''
         /run/current-system/sw/bin/nvpmodel --force -f /etc/nvpmodel.conf -m 0
       '';
+
+      services.serial-bridge = {
+        gpsClockSource = true;
+      };
 
       services.hello-service = {
         enable = true;
