@@ -117,35 +117,10 @@ async fn run() -> anyhow::Result<()> {
 
     let telemetry_id: PacketId = fastrand::u16(..).to_le_bytes();
 
-    loop {
-        if let Err(err) = bridge_loop(&config, &home, telemetry_id).await {
-            tracing::error!("bridge error: {:?}", err);
-            stellarator::sleep(Duration::from_millis(500)).await;
-        }
-    }
-}
-
-async fn bridge_loop(
-    config: &Config,
-    home: &HomeLocation,
-    telemetry_id: PacketId,
-) -> anyhow::Result<()> {
-    let elodin_addr: SocketAddr = config
-        .elodin_addr
-        .parse()
-        .context("invalid elodin_addr")?;
-
-    tracing::info!("connecting to Elodin-DB at {}", elodin_addr);
-
-    let mut client = Client::connect(elodin_addr)
-        .await
-        .map_err(anyhow::Error::from)?;
-    client.init_world::<MotorTelemetry>(telemetry_id).await?;
-
+    // Bind UDP once -- reused across Elodin-DB reconnects.
     let bind_addr: SocketAddr = format!("0.0.0.0:{}", config.servo_port)
         .parse()
         .unwrap();
-
     let udp_socket = UdpSocket::bind(bind_addr)
         .context("bind UDP control port")?;
     udp_socket
@@ -161,8 +136,6 @@ async fn bridge_loop(
         if can.is_enabled() { &config.can_interface } else { "disabled" }
     );
 
-    let mut ap_addr: Option<SocketAddr> = None;
-
     if config.hitl_port > 0 {
         let hitl_port = config.hitl_port;
         let hitl_udp = udp_socket.try_clone().context("clone UDP for HITL")?;
@@ -174,13 +147,11 @@ async fn bridge_loop(
         });
     }
 
-    // -----------------------------------------------------------------------
     // GPS subscription -- background thread, ~2.5 Hz from STM32 UBX parser.
-    // -----------------------------------------------------------------------
     let gps_cache = Arc::new(Mutex::new(GpsCache::default()));
     {
         let gps_cache = Arc::clone(&gps_cache);
-        let home = *home;
+        let home = home;
         let elodin_addr_str = config.elodin_addr.clone();
         std::thread::spawn(move || {
             if let Err(e) = stellarator::run(move || gps_task(elodin_addr_str, home, gps_cache)) {
@@ -189,11 +160,7 @@ async fn bridge_loop(
         });
     }
 
-    // -----------------------------------------------------------------------
-    // MEKF attitude subscription -- background thread, ~500 Hz from MEKF.
-    // Provides sensor-fused attitude (real compass + IMU) for the SITL
-    // attitude field, driving ArduPilot's internal compass simulation.
-    // -----------------------------------------------------------------------
+    // MEKF attitude subscription -- background thread, ~500 Hz.
     let attitude_cache = Arc::new(Mutex::new(AttitudeCache::default()));
     {
         let attitude_cache = Arc::clone(&attitude_cache);
@@ -205,12 +172,7 @@ async fn bridge_loop(
         });
     }
 
-    // -----------------------------------------------------------------------
     // IMU subscription -- background thread, ~1500 Hz from STM32 sensor-fw.
-    // Uses the same pattern as GPS/MEKF (separate stellarator runtime in a
-    // dedicated thread) because the main async runtime's subscription
-    // doesn't reliably deliver data after a fresh DB restart.
-    // -----------------------------------------------------------------------
     let imu_cache = Arc::new(Mutex::new(ImuCache::default()));
     {
         let imu_cache = Arc::clone(&imu_cache);
@@ -222,15 +184,48 @@ async fn bridge_loop(
         });
     }
 
-    // -----------------------------------------------------------------------
-    // Main loop -- polls filtered IMU cache (~400 Hz from the background
-    // integrator) and sends JSON packets to ArduPilot.
-    // -----------------------------------------------------------------------
+    // Retry loop -- only the Elodin-DB connection is re-established on error.
+    // The UDP socket and background threads survive across retries.
+    loop {
+        if let Err(err) = bridge_loop(
+            &config, telemetry_id,
+            &udp_socket, &mut can,
+            &gps_cache, &attitude_cache, &imu_cache,
+        ).await {
+            tracing::error!("bridge error: {:?}", err);
+            stellarator::sleep(Duration::from_millis(500)).await;
+        }
+    }
+}
+
+async fn bridge_loop(
+    config: &Config,
+    telemetry_id: PacketId,
+    udp_socket: &UdpSocket,
+    can: &mut CanOutput,
+    gps_cache: &Arc<Mutex<GpsCache>>,
+    attitude_cache: &Arc<Mutex<AttitudeCache>>,
+    imu_cache: &Arc<Mutex<ImuCache>>,
+) -> anyhow::Result<()> {
+    let elodin_addr: SocketAddr = config
+        .elodin_addr
+        .parse()
+        .context("invalid elodin_addr")?;
+
+    tracing::info!("connecting to Elodin-DB at {}", elodin_addr);
+
+    let mut client = Client::connect(elodin_addr)
+        .await
+        .map_err(anyhow::Error::from)?;
+    client.init_world::<MotorTelemetry>(telemetry_id).await?;
+
+    tracing::info!("connected to Elodin-DB, entering main loop");
+
+    let mut ap_addr: Option<SocketAddr> = None;
     let mut last_imu_seq: u64 = 0;
     let mut output_tick: u64 = 0;
 
     loop {
-        // Check for servo output from ArduPilot (non-blocking)
         let mut servo_buf = [0u8; 256];
         if let Ok((n, src)) = udp_socket.recv_from(&mut servo_buf) {
             if let Some(servo) = ServoOutput::from_bytes(&servo_buf[..n]) {
@@ -281,7 +276,6 @@ async fn bridge_loop(
         }
         let target = ap_addr.unwrap();
 
-        // Poll IMU cache for new samples
         let imu = {
             let c = imu_cache.lock().unwrap();
             *c

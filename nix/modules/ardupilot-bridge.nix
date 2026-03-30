@@ -78,6 +78,7 @@ in
         if [ -d /run/systemd/system ] && \
            /run/current-system/sw/bin/systemctl is-active --quiet ardupilot-bridge.service 2>/dev/null; then
           echo "restarting ardupilot-bridge for fresh state..."
+          /run/current-system/sw/bin/systemctl daemon-reload
           /run/current-system/sw/bin/systemctl restart ardupilot-bridge.service || true
         fi
       '';

@@ -78,6 +78,7 @@ in
         if [ -d /run/systemd/system ] && \
            /run/current-system/sw/bin/systemctl is-active --quiet arducopter.service 2>/dev/null; then
           echo "restarting arducopter for fresh parameter state..."
+          /run/current-system/sw/bin/systemctl daemon-reload
           /run/current-system/sw/bin/systemctl restart arducopter.service || true
         fi
       '';
