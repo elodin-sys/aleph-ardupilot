@@ -14,7 +14,7 @@ use zerocopy::{Immutable, IntoBytes, KnownLayout, TryFromBytes};
 
 /// IMU sensor data from the on-board BMI270/BMM350 (~1500 Hz).
 #[derive(AsVTable, Default, Debug, Clone, TryFromBytes, Immutable, KnownLayout)]
-#[db(parent = "IMU")]
+#[db(parent = "imu")]
 pub struct SensorInput {
     pub mag: [f32; 3],
     pub gyro: [f32; 3],
@@ -26,7 +26,7 @@ pub struct SensorInput {
 /// repr(C, packed) ensures the struct layout matches the DB wire format
 /// exactly -- no alignment padding between fields of different sizes.
 #[derive(AsVTable, Default, Debug, Clone, TryFromBytes, Immutable, KnownLayout)]
-#[db(parent = "M10Q")]
+#[db(parent = "m10q")]
 #[repr(C, packed)]
 pub struct M10QInput {
     pub lat: i32,              // 1e-7 degrees
@@ -50,7 +50,7 @@ pub struct M10QInput {
 /// Connected via STM32 I2C4 (J7 connector), mounted away from the Orin NX
 /// to minimize magnetic interference.
 #[derive(AsVTable, Default, Debug, Clone, TryFromBytes, Immutable, KnownLayout)]
-#[db(parent = "QMC5883L")]
+#[db(parent = "qmc5883l")]
 #[repr(C, packed)]
 pub struct QMC5883LInput {
     pub mag: [i16; 3],         // raw magnetometer LSB (12000 LSB/Gauss at ±2G range)

@@ -10,18 +10,18 @@
       },
       "locked": {
         "dir": "aleph",
-        "lastModified": 1774938732,
-        "narHash": "sha256-LW5D2Xhai0mRr79n6fF38vJSvejOkcMBmTmJ0H314UQ=",
+        "lastModified": 1775000178,
+        "narHash": "sha256-8M9dXEH9EBtcTlHYYMhVZbuY9U3BPSZ3+Rii5MdPISY=",
         "owner": "elodin-sys",
         "repo": "elodin",
-        "rev": "7c66776bc19843697960054ffc8f0b93aec9beda",
+        "rev": "860b906b52a907cfa760259e7092ea65686f89a4",
         "type": "github"
       },
       "original": {
         "dir": "aleph",
         "owner": "elodin-sys",
         "repo": "elodin",
-        "rev": "7c66776bc19843697960054ffc8f0b93aec9beda",
+        "rev": "860b906b52a907cfa760259e7092ea65686f89a4",
         "type": "github"
       }
     },
@@ -79,17 +79,17 @@
         "systems": "systems_2"
       },
       "locked": {
-        "lastModified": 1774938732,
-        "narHash": "sha256-LW5D2Xhai0mRr79n6fF38vJSvejOkcMBmTmJ0H314UQ=",
+        "lastModified": 1775000178,
+        "narHash": "sha256-8M9dXEH9EBtcTlHYYMhVZbuY9U3BPSZ3+Rii5MdPISY=",
         "owner": "elodin-sys",
         "repo": "elodin",
-        "rev": "7c66776bc19843697960054ffc8f0b93aec9beda",
+        "rev": "860b906b52a907cfa760259e7092ea65686f89a4",
         "type": "github"
       },
       "original": {
         "owner": "elodin-sys",
         "repo": "elodin",
-        "rev": "7c66776bc19843697960054ffc8f0b93aec9beda",
+        "rev": "860b906b52a907cfa760259e7092ea65686f89a4",
         "type": "github"
       }
     },

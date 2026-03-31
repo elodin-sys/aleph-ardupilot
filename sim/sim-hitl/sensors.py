@@ -87,7 +87,13 @@ class Noise:
 gyro_noise = Noise(0, 0, 0.001, 0.001)
 init_gyro_bias = jnp.array([0.0025, 0.0001, 0.0005])
 accel_noise = Noise(0, 1, 0.001, 0.0)
-mag_noise = Noise(0, 2, 0.0001, 0.0)
+mag_noise = Noise(0, 2, 6.0, 0.0)
+
+# IGRF Earth magnetic field at San Francisco (37.77N, 122.42W) in ENU,
+# scaled to match the BMM350 firmware output units observed in real-world
+# test-db-csv (magnitude ~247).  Raw IGRF: ~48.4 uT total, dec ~13 deg E,
+# inc ~61 deg.  Scale factor ~5.1 converts uT to firmware units.
+MAG_FIELD_ENU = jnp.array([27.0, 116.0, -216.0])
 
 
 @dataclass
@@ -97,7 +103,7 @@ class IMU(el.Archetype):
     gyro_bias: GyroBias = field(default_factory=lambda: jnp.array(init_gyro_bias))
     accel: Accel = field(default_factory=lambda: jnp.zeros(3))
     accel_bias: AccelBias = field(default_factory=lambda: jnp.zeros(3))
-    mag: Magnetometer = field(default_factory=lambda: jnp.array([0.0, 1.0, 0.0]))
+    mag: Magnetometer = field(default_factory=lambda: jnp.array(MAG_FIELD_ENU))
     mag_bias: MagnetometerBias = field(default_factory=lambda: jnp.zeros(3))
     gyro_lpf_delay: GyroLPFDelay = field(default_factory=lambda: jnp.zeros((4, 3)))
     accel_lpf_delay: AccelLPFDelay = field(default_factory=lambda: jnp.zeros((4, 3)))
@@ -168,7 +174,7 @@ def mag_system(
     dt = Config.GLOBAL.dt
     data_rate = 1.0 / 100.0
     tick_rate = round(data_rate / dt)
-    body_mag_ref = p.angular().inverse() @ jnp.array([0.0, 1.0, 0.0])
+    body_mag_ref = p.angular().inverse() @ MAG_FIELD_ENU
     if Config.GLOBAL.sensor_noise:
         body_mag_ref = mag_noise.sample(body_mag_ref, bias, tick)
     return jax.lax.cond(

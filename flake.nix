@@ -20,8 +20,8 @@
   };
 
   inputs = {
-    aleph.url = "github:elodin-sys/elodin?rev=7c66776bc19843697960054ffc8f0b93aec9beda&dir=aleph";
-    elodin.url = "github:elodin-sys/elodin?rev=7c66776bc19843697960054ffc8f0b93aec9beda";
+    aleph.url = "github:elodin-sys/elodin?rev=860b906b52a907cfa760259e7092ea65686f89a4&dir=aleph";
+    elodin.url = "github:elodin-sys/elodin?rev=860b906b52a907cfa760259e7092ea65686f89a4";
     flake-utils.follows = "aleph/flake-utils";
     nixpkgs.follows = "aleph/nixpkgs";
 
@@ -217,7 +217,7 @@
       # Bridge points at the laptop's Elodin-DB.
       services.ardupilot-bridge = {
         enable = true;
-        elodinAddr = "192.168.4.182:2240";
+        elodinAddr = "192.168.4.102:2240";
         hitlPort = 0;
       };
     };

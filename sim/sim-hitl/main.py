@@ -7,6 +7,7 @@ real hardware:
     Simulation  -->  "IMU" entity (gyro/accel/mag f32)     -->  bridge subscribes
     Simulation  -->  "M10Q" entity (GPS UBX integers)      -->  bridge subscribes
     Simulation  -->  "QMC5883L" entity (compass i16 LSB)   -->  bridge subscribes
+    Simulation  -->  "aleph" entity (q_hat/baro/baro_temp) -->  bridge subscribes
     bridge writes "ardupilot" entity (motor_command)       -->  Simulation reads
 
 The bridge is completely unaware a simulation is involved -- it sees the
@@ -47,78 +48,80 @@ DB_PATH = "/tmp/sim-hitl-db"
 # Bridge-facing output schemas (must match ardupilot-bridge Rust structs)
 # ---------------------------------------------------------------------------
 
+_EXT = {"external_control": "true"}
+
 SensorMag = ty.Annotated[
     jax.Array,
-    el.Component("mag", el.ComponentType(el.PrimitiveType.F32, (3,))),
+    el.Component("mag", el.ComponentType(el.PrimitiveType.F32, (3,)), metadata=_EXT),
 ]
 SensorGyro = ty.Annotated[
     jax.Array,
-    el.Component("gyro", el.ComponentType(el.PrimitiveType.F32, (3,))),
+    el.Component("gyro", el.ComponentType(el.PrimitiveType.F32, (3,)), metadata=_EXT),
 ]
 SensorAccel = ty.Annotated[
     jax.Array,
-    el.Component("accel", el.ComponentType(el.PrimitiveType.F32, (3,))),
+    el.Component("accel", el.ComponentType(el.PrimitiveType.F32, (3,)), metadata=_EXT),
 ]
 
 M10QLat = ty.Annotated[
     jax.Array,
-    el.Component("lat", el.ComponentType(el.PrimitiveType.I32, (1,))),
+    el.Component("lat", el.ComponentType(el.PrimitiveType.I32, (1,)), metadata=_EXT),
 ]
 M10QLon = ty.Annotated[
     jax.Array,
-    el.Component("lon", el.ComponentType(el.PrimitiveType.I32, (1,))),
+    el.Component("lon", el.ComponentType(el.PrimitiveType.I32, (1,)), metadata=_EXT),
 ]
 M10QAltMsl = ty.Annotated[
     jax.Array,
-    el.Component("alt_msl", el.ComponentType(el.PrimitiveType.I32, (1,))),
+    el.Component("alt_msl", el.ComponentType(el.PrimitiveType.I32, (1,)), metadata=_EXT),
 ]
 M10QAltWgs84 = ty.Annotated[
     jax.Array,
-    el.Component("alt_wgs84", el.ComponentType(el.PrimitiveType.I32, (1,))),
+    el.Component("alt_wgs84", el.ComponentType(el.PrimitiveType.I32, (1,)), metadata=_EXT),
 ]
 M10QVelNed = ty.Annotated[
     jax.Array,
-    el.Component("vel_ned", el.ComponentType(el.PrimitiveType.I32, (3,))),
+    el.Component("vel_ned", el.ComponentType(el.PrimitiveType.I32, (3,)), metadata=_EXT),
 ]
 M10QFixType = ty.Annotated[
     jax.Array,
-    el.Component("fix_type", el.ComponentType(el.PrimitiveType.U8, (1,))),
+    el.Component("fix_type", el.ComponentType(el.PrimitiveType.U8, (1,)), metadata=_EXT),
 ]
 M10QSatellites = ty.Annotated[
     jax.Array,
-    el.Component("satellites", el.ComponentType(el.PrimitiveType.U8, (1,))),
+    el.Component("satellites", el.ComponentType(el.PrimitiveType.U8, (1,)), metadata=_EXT),
 ]
 M10QHAcc = ty.Annotated[
     jax.Array,
-    el.Component("h_acc", el.ComponentType(el.PrimitiveType.U32, (1,))),
+    el.Component("h_acc", el.ComponentType(el.PrimitiveType.U32, (1,)), metadata=_EXT),
 ]
 M10QVAcc = ty.Annotated[
     jax.Array,
-    el.Component("v_acc", el.ComponentType(el.PrimitiveType.U32, (1,))),
+    el.Component("v_acc", el.ComponentType(el.PrimitiveType.U32, (1,)), metadata=_EXT),
 ]
 M10QSAcc = ty.Annotated[
     jax.Array,
-    el.Component("s_acc", el.ComponentType(el.PrimitiveType.U32, (1,))),
+    el.Component("s_acc", el.ComponentType(el.PrimitiveType.U32, (1,)), metadata=_EXT),
 ]
 M10QGroundSpeed = ty.Annotated[
     jax.Array,
-    el.Component("ground_speed", el.ComponentType(el.PrimitiveType.U32, (1,))),
+    el.Component("ground_speed", el.ComponentType(el.PrimitiveType.U32, (1,)), metadata=_EXT),
 ]
 M10QHeadingMotion = ty.Annotated[
     jax.Array,
-    el.Component("heading_motion", el.ComponentType(el.PrimitiveType.I32, (1,))),
+    el.Component("heading_motion", el.ComponentType(el.PrimitiveType.I32, (1,)), metadata=_EXT),
 ]
 M10QValidFlags = ty.Annotated[
     jax.Array,
-    el.Component("valid_flags", el.ComponentType(el.PrimitiveType.U8, (1,))),
+    el.Component("valid_flags", el.ComponentType(el.PrimitiveType.U8, (1,)), metadata=_EXT),
 ]
 M10QItow = ty.Annotated[
     jax.Array,
-    el.Component("itow", el.ComponentType(el.PrimitiveType.U32, (1,))),
+    el.Component("itow", el.ComponentType(el.PrimitiveType.U32, (1,)), metadata=_EXT),
 ]
 M10QUnixEpochMs = ty.Annotated[
     jax.Array,
-    el.Component("unix_epoch_ms", el.ComponentType(el.PrimitiveType.I64, (1,))),
+    el.Component("unix_epoch_ms", el.ComponentType(el.PrimitiveType.I64, (1,)), metadata=_EXT),
 ]
 
 
@@ -149,11 +152,11 @@ class M10QOutput(el.Archetype):
 
 QMC5883LMag = ty.Annotated[
     jax.Array,
-    el.Component("mag", el.ComponentType(el.PrimitiveType.I16, (3,))),
+    el.Component("mag", el.ComponentType(el.PrimitiveType.I16, (3,)), metadata=_EXT),
 ]
 QMC5883LStatus = ty.Annotated[
     jax.Array,
-    el.Component("status", el.ComponentType(el.PrimitiveType.U8, (1,))),
+    el.Component("status", el.ComponentType(el.PrimitiveType.U8, (1,)), metadata=_EXT),
 ]
 
 
@@ -163,9 +166,29 @@ class QMC5883LOutput(el.Archetype):
     status: QMC5883LStatus = field(default_factory=lambda: jnp.zeros(1, dtype=jnp.uint8))
 
 
+AlephQHat = ty.Annotated[
+    jax.Array,
+    el.Component("q_hat", el.ComponentType(el.PrimitiveType.F64, (4,)), metadata=_EXT),
+]
+AlephBaro = ty.Annotated[
+    jax.Array,
+    el.Component("baro", el.ComponentType.F64, metadata=_EXT),
+]
+AlephBaroTemp = ty.Annotated[
+    jax.Array,
+    el.Component("baro_temp", el.ComponentType.F64, metadata=_EXT),
+]
+
+
+@dataclass
+class AlephOutput(el.Archetype):
+    q_hat: AlephQHat = field(default_factory=lambda: jnp.array([0.0, 0.0, 0.0, 1.0]))
+    baro: AlephBaro = field(default_factory=lambda: jnp.float64(101325.0))
+    baro_temp: AlephBaroTemp = field(default_factory=lambda: jnp.float64(39.8))
+
+
 # Earth magnetic field magnitude at San Francisco (~0.48 Gauss).
-# QMC5883L sensitivity at ±2G range: 12000 LSB/Gauss.
-EARTH_FIELD_GAUSS = 0.48
+# QMC5883L sensitivity at ±8G range: 3000 LSB/Gauss.
 QMC5883L_LSB_PER_GAUSS = 3000.0
 
 # ---------------------------------------------------------------------------
@@ -192,9 +215,10 @@ drone = world.spawn(
 # "M10Q"      -- GPS in UBX integer format (same schema as serial-bridge writes)
 # "QMC5883L"  -- external compass in i16 LSB (same schema as serial-bridge writes)
 # "ardupilot" -- motor data the bridge writes back (MotorTelemetry)
-imu = world.spawn([SensorOutput()], name="IMU")
-m10q = world.spawn([M10QOutput()], name="M10Q")
-qmc5883l = world.spawn([QMC5883LOutput()], name="QMC5883L")
+imu = world.spawn([SensorOutput()], name="imu")
+m10q = world.spawn([M10QOutput()], name="m10q")
+qmc5883l = world.spawn([QMC5883LOutput()], name="qmc5883l")
+aleph = world.spawn([AlephOutput()], name="aleph")
 ardupilot = world.spawn([], name="ardupilot")
 
 # ---------------------------------------------------------------------------
@@ -257,6 +281,7 @@ world.schematic(
 _last_print = [0.0]
 _start_time = [None]
 _gps_rng = np.random.default_rng(42)
+_baro_rng = np.random.default_rng(99)
 _home_lat_rad = math.radians(config.home_lat)
 
 
@@ -271,23 +296,50 @@ def post_step(tick: int, ctx: el.StepContext):
     try:
         gyro = np.array(ctx.read_component("drone.sim_gyro"), dtype=np.float32)
         accel = np.array(ctx.read_component("drone.sim_accel"), dtype=np.float32)
+        accel = accel / 9.80665  # m/s^2 -> g (real IMU reports in g)
         mag = np.array(ctx.read_component("drone.magnetometer"), dtype=np.float32)
 
-        ctx.write_component("IMU.gyro", gyro)
-        ctx.write_component("IMU.accel", accel)
-        ctx.write_component("IMU.mag", mag)
+        ctx.write_component("imu.gyro", gyro)
+        ctx.write_component("imu.accel", accel)
+        ctx.write_component("imu.mag", mag)
     except RuntimeError:
         pass
 
-    # --- QMC5883L: drone magnetometer (f64 unit vector) -> i16 LSB ---
+    # --- QMC5883L: drone magnetometer (scaled firmware units) -> i16 LSB ---
+    # The magnetometer component is in scaled BMM350 firmware units (magnitude
+    # ~247).  Convert to Gauss (1 uT = 0.01 Gauss; scale factor ~5.1 means
+    # 1 firmware unit ≈ 0.196 uT ≈ 0.00196 Gauss), then to QMC5883L LSB.
     try:
         mag_f64 = np.array(ctx.read_component("drone.magnetometer"), dtype=np.float64).flatten()
-        mag_gauss = mag_f64 * EARTH_FIELD_GAUSS
+        mag_ut = mag_f64 / 5.1  # firmware units -> uT
+        mag_gauss = mag_ut * 0.01  # 1 uT = 0.01 Gauss
         mag_lsb = np.clip(mag_gauss * QMC5883L_LSB_PER_GAUSS, -32768, 32767).astype(np.int16)
-        ctx.write_component("QMC5883L.mag", mag_lsb)
-        ctx.write_component("QMC5883L.status", np.array([0x01], dtype=np.uint8))
+        ctx.write_component("qmc5883l.mag", mag_lsb)
+        ctx.write_component("qmc5883l.status", np.array([0x01], dtype=np.uint8))
     except RuntimeError:
         pass
+
+    # --- Aleph MEKF: physics truth quaternion -> aleph.q_hat ---
+    try:
+        world_pos = np.array(ctx.read_component("drone.world_pos"), dtype=np.float64)
+        q_hat = world_pos[:4]  # [qx, qy, qz, qw] -- already xyzw order
+        ctx.write_component("aleph.q_hat", q_hat)
+    except RuntimeError:
+        pass
+
+    # --- Aleph baro: altitude -> pressure model at ~10 Hz ---
+    baro_interval = max(1, round(1.0 / (10.0 * config.dt)))
+    if tick % baro_interval == 0:
+        try:
+            world_pos_b = np.array(ctx.read_component("drone.world_pos"), dtype=np.float64)
+            alt_m = float(world_pos_b[6]) + config.home_alt
+            pressure = 101325.0 * (1.0 - 2.2558e-5 * alt_m) ** 5.2559
+            pressure += _baro_rng.normal(0, 0.5)
+            temp = 39.8 + _baro_rng.normal(0, 0.01)
+            ctx.write_component("aleph.baro", np.array([pressure], dtype=np.float64))
+            ctx.write_component("aleph.baro_temp", np.array([temp], dtype=np.float64))
+        except RuntimeError:
+            pass
 
     # --- GPS: drone (f64 truth) -> noise -> M10Q entity (UBX integers) ---
     # Noise is injected here using numpy PRNG (not JAX) so each fix gets
@@ -330,21 +382,21 @@ def post_step(tick: int, ctx: el.StepContext):
             v_acc_mm = int(round(config.gps_vacc_std * 1e3))
             s_acc_mms = int(round(config.gps_sacc_std * 1e3))
 
-            ctx.write_component("M10Q.lat", np.array([lat_e7], dtype=np.int32))
-            ctx.write_component("M10Q.lon", np.array([lon_e7], dtype=np.int32))
-            ctx.write_component("M10Q.alt_msl", np.array([alt_mm], dtype=np.int32))
-            ctx.write_component("M10Q.alt_wgs84", np.array([alt_mm], dtype=np.int32))
+            ctx.write_component("m10q.lat", np.array([lat_e7], dtype=np.int32))
+            ctx.write_component("m10q.lon", np.array([lon_e7], dtype=np.int32))
+            ctx.write_component("m10q.alt_msl", np.array([alt_mm], dtype=np.int32))
+            ctx.write_component("m10q.alt_wgs84", np.array([alt_mm], dtype=np.int32))
             ctx.write_component("M10Q.vel_ned", np.array(vel_ned_mms, dtype=np.int32))
-            ctx.write_component("M10Q.fix_type", np.array([3], dtype=np.uint8))
-            ctx.write_component("M10Q.satellites", np.array([12], dtype=np.uint8))
-            ctx.write_component("M10Q.h_acc", np.array([h_acc_mm], dtype=np.uint32))
-            ctx.write_component("M10Q.v_acc", np.array([v_acc_mm], dtype=np.uint32))
-            ctx.write_component("M10Q.s_acc", np.array([s_acc_mms], dtype=np.uint32))
-            ctx.write_component("M10Q.ground_speed", np.array([gs_mms], dtype=np.uint32))
-            ctx.write_component("M10Q.heading_motion", np.array([hdg_e5], dtype=np.int32))
-            ctx.write_component("M10Q.valid_flags", np.array([0x37], dtype=np.uint8))
-            ctx.write_component("M10Q.itow", np.array([int(t * 1000) % 604800000], dtype=np.uint32))
-            ctx.write_component("M10Q.unix_epoch_ms", np.array([int(time.time() * 1000)], dtype=np.int64))
+            ctx.write_component("m10q.fix_type", np.array([3], dtype=np.uint8))
+            ctx.write_component("m10q.satellites", np.array([12], dtype=np.uint8))
+            ctx.write_component("m10q.h_acc", np.array([h_acc_mm], dtype=np.uint32))
+            ctx.write_component("m10q.v_acc", np.array([v_acc_mm], dtype=np.uint32))
+            ctx.write_component("m10q.s_acc", np.array([s_acc_mms], dtype=np.uint32))
+            ctx.write_component("m10q.ground_speed", np.array([gs_mms], dtype=np.uint32))
+            ctx.write_component("m10q.heading_motion", np.array([hdg_e5], dtype=np.int32))
+            ctx.write_component("m10q.valid_flags", np.array([0x37], dtype=np.uint8))
+            ctx.write_component("m10q.itow", np.array([int(t * 1000) % 604800000], dtype=np.uint32))
+            ctx.write_component("m10q.unix_epoch_ms", np.array([int(t * 1000)], dtype=np.int64))
         except RuntimeError:
             pass
 
@@ -406,6 +458,7 @@ print("Data flows through the DB -- same code path as real hardware.")
 print('  Bridge reads: "IMU" entity (gyro/accel/mag)')
 print('  Bridge reads: "M10Q" entity (GPS UBX integers)')
 print('  Bridge reads: "QMC5883L" entity (compass i16 LSB)')
+print('  Bridge reads: "aleph" entity (q_hat/baro/baro_temp)')
 print('  Bridge writes: "ardupilot" entity (motor_command/motor_pwm)')
 print()
 print("Deploy sim-hitl config to the Aleph:")
