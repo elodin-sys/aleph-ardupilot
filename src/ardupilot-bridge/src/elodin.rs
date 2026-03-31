@@ -57,6 +57,13 @@ pub struct QMC5883LInput {
     pub status: u8,
 }
 
+/// Attitude estimate from the aleph MEKF.
+#[derive(AsVTable, Default, Debug, Clone, TryFromBytes, Immutable, KnownLayout)]
+#[db(parent = "aleph")]
+pub struct MekfInput {
+    pub q_hat: [f64; 4],
+}
+
 /// Motor command telemetry written back to Elodin-DB.
 #[derive(AsVTable, Metadatatize, IntoBytes, Immutable, Debug)]
 #[db(parent = "ardupilot")]

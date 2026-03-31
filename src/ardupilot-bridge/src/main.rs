@@ -11,9 +11,9 @@ use crate::config::{Config, HomeLocation};
 use crate::coordinate::{
     gyro_flu_to_frd, accel_flu_to_frd,
     ubx_lla_to_ned, ubx_vel_to_ms, ubx_heading_to_rad,
-    qmc_raw_to_gauss,
+    qmc_raw_to_gauss, mekf_quat_to_euler_ned, blend_angle,
 };
-use crate::elodin::{M10QInput, QMC5883LInput, MotorTelemetry, SensorInput};
+use crate::elodin::{M10QInput, QMC5883LInput, MekfInput, MotorTelemetry, SensorInput};
 
 use anyhow::Context;
 use clap::Parser;
@@ -78,6 +78,26 @@ impl Default for ImuCache {
             accel: [0.0; 3],
             timestamp: 0.0,
             seq: 0,
+        }
+    }
+}
+
+/// Cached MEKF attitude, updated from aleph.q_hat at high rate.
+#[derive(Debug, Clone, Copy)]
+struct AttitudeCache {
+    roll: f64,
+    pitch: f64,
+    yaw: f64,
+    valid: bool,
+}
+
+impl Default for AttitudeCache {
+    fn default() -> Self {
+        Self {
+            roll: 0.0,
+            pitch: 0.0,
+            yaw: 0.0,
+            valid: false,
         }
     }
 }
@@ -167,6 +187,18 @@ async fn run() -> anyhow::Result<()> {
         });
     }
 
+    // MEKF attitude subscription -- background thread, high-rate aleph.q_hat.
+    let attitude_cache = Arc::new(Mutex::new(AttitudeCache::default()));
+    {
+        let attitude_cache = Arc::clone(&attitude_cache);
+        let elodin_addr_str = config.elodin_addr.clone();
+        std::thread::spawn(move || {
+            if let Err(e) = stellarator::run(move || mekf_task(elodin_addr_str, attitude_cache)) {
+                tracing::error!("MEKF task fatal: {:?}", e);
+            }
+        });
+    }
+
     // IMU subscription -- background thread, ~1500 Hz from STM32 sensor-fw.
     let imu_cache = Arc::new(Mutex::new(ImuCache::default()));
     {
@@ -185,7 +217,7 @@ async fn run() -> anyhow::Result<()> {
         if let Err(err) = bridge_loop(
             &config, telemetry_id,
             &udp_socket, &mut can,
-            &gps_cache, &mag_cache, &imu_cache,
+            &gps_cache, &mag_cache, &imu_cache, &attitude_cache,
         ).await {
             tracing::error!("bridge error: {:?}", err);
             stellarator::sleep(Duration::from_millis(500)).await;
@@ -199,8 +231,9 @@ async fn bridge_loop(
     udp_socket: &UdpSocket,
     can: &mut CanOutput,
     gps_cache: &Arc<Mutex<GpsCache>>,
-    mag_cache: &Arc<Mutex<MagCache>>,
+    _mag_cache: &Arc<Mutex<MagCache>>,
     imu_cache: &Arc<Mutex<ImuCache>>,
+    attitude_cache: &Arc<Mutex<AttitudeCache>>,
 ) -> anyhow::Result<()> {
     let elodin_addr: SocketAddr = config
         .elodin_addr
@@ -302,14 +335,35 @@ async fn bridge_loop(
         };
         let gps_yaw = gps.yaw_rad;
         let gps_fix = gps.has_fix;
+        let ground_speed_ms = gps.ground_speed_ms;
         drop(gps);
+
+        let mekf = {
+            let c = attitude_cache.lock().unwrap();
+            *c
+        };
 
         let gx = -imu.accel[0];
         let gy = -imu.accel[1];
         let gz = -imu.accel[2];
         let roll = gy.atan2(gz);
         let pitch = (-gx).atan2(gy * roll.sin() + gz * roll.cos());
-        let yaw = if gps_fix { gps_yaw } else { 0.0 };
+        let yaw = if mekf.valid {
+            if !gps_fix {
+                mekf.yaw
+            } else if ground_speed_ms > 3.0 {
+                gps_yaw
+            } else if ground_speed_ms > 1.0 {
+                let alpha = (ground_speed_ms - 1.0) / 2.0;
+                blend_angle(mekf.yaw, gps_yaw, alpha)
+            } else {
+                mekf.yaw
+            }
+        } else if gps_fix {
+            gps_yaw
+        } else {
+            0.0
+        };
         let attitude = [roll, pitch, yaw];
 
         let packet = SitlJsonPacket {
@@ -546,6 +600,57 @@ async fn qmc5883l_subscribe_loop(
             tracing::info!(
                 "MAG: raw=[{:.4},{:.4},{:.4}] |B|={:.4} G",
                 mag_gauss[0], mag_gauss[1], mag_gauss[2], magnitude,
+            );
+        }
+    }
+}
+
+/// MEKF attitude subscription task. Reconnects on error.
+/// Subscribes to `aleph.q_hat`, converts ENU/FLU quaternion to NED/FRD Euler.
+async fn mekf_task(
+    elodin_addr: String,
+    cache: Arc<Mutex<AttitudeCache>>,
+) -> anyhow::Result<()> {
+    loop {
+        match mekf_subscribe_loop(&elodin_addr, &cache).await {
+            Ok(()) => {}
+            Err(e) => {
+                tracing::warn!("MEKF subscription error (will retry): {}", e);
+                stellarator::sleep(Duration::from_secs(2)).await;
+            }
+        }
+    }
+}
+
+async fn mekf_subscribe_loop(
+    elodin_addr: &str,
+    cache: &Arc<Mutex<AttitudeCache>>,
+) -> anyhow::Result<()> {
+    let addr: SocketAddr = elodin_addr.parse().context("parse elodin addr for MEKF")?;
+    let mut client = Client::connect(addr).await.map_err(anyhow::Error::from)?;
+    let mut sub = client.subscribe::<MekfInput>().await?;
+    tracing::info!("MEKF: subscribed to aleph.q_hat");
+
+    let mut tick: u64 = 0;
+    loop {
+        let input = sub.next().await?;
+        let euler_ned = mekf_quat_to_euler_ned(input.q_hat);
+
+        {
+            let mut c = cache.lock().unwrap();
+            c.roll = euler_ned[0];
+            c.pitch = euler_ned[1];
+            c.yaw = euler_ned[2];
+            c.valid = true;
+        }
+
+        tick += 1;
+        if tick % 1000 == 1 {
+            tracing::info!(
+                "MEKF: rpy=[{:.1},{:.1},{:.1}] deg",
+                euler_ned[0].to_degrees(),
+                euler_ned[1].to_degrees(),
+                euler_ned[2].to_degrees(),
             );
         }
     }

@@ -33,6 +33,129 @@ pub fn accel_flu_to_frd(flu: [f64; 3]) -> [f64; 3] {
 }
 
 // ---------------------------------------------------------------------------
+// MEKF quaternion conversions (Elodin ENU/FLU -> ArduPilot NED/FRD)
+// ---------------------------------------------------------------------------
+
+fn quat_xyzw_to_rotmat(q: [f64; 4]) -> [[f64; 3]; 3] {
+    let x = q[0];
+    let y = q[1];
+    let z = q[2];
+    let w = q[3];
+
+    let xx = x * x;
+    let yy = y * y;
+    let zz = z * z;
+    let xy = x * y;
+    let xz = x * z;
+    let yz = y * z;
+    let wx = w * x;
+    let wy = w * y;
+    let wz = w * z;
+
+    [
+        [1.0 - 2.0 * (yy + zz), 2.0 * (xy - wz), 2.0 * (xz + wy)],
+        [2.0 * (xy + wz), 1.0 - 2.0 * (xx + zz), 2.0 * (yz - wx)],
+        [2.0 * (xz - wy), 2.0 * (yz + wx), 1.0 - 2.0 * (xx + yy)],
+    ]
+}
+
+fn rotmat_to_quat_wxyz(r: [[f64; 3]; 3]) -> [f64; 4] {
+    let trace = r[0][0] + r[1][1] + r[2][2];
+    let (w, x, y, z) = if trace > 0.0 {
+        let s = (trace + 1.0).sqrt() * 2.0;
+        (
+            0.25 * s,
+            (r[2][1] - r[1][2]) / s,
+            (r[0][2] - r[2][0]) / s,
+            (r[1][0] - r[0][1]) / s,
+        )
+    } else if r[0][0] > r[1][1] && r[0][0] > r[2][2] {
+        let s = (1.0 + r[0][0] - r[1][1] - r[2][2]).sqrt() * 2.0;
+        (
+            (r[2][1] - r[1][2]) / s,
+            0.25 * s,
+            (r[0][1] + r[1][0]) / s,
+            (r[0][2] + r[2][0]) / s,
+        )
+    } else if r[1][1] > r[2][2] {
+        let s = (1.0 + r[1][1] - r[0][0] - r[2][2]).sqrt() * 2.0;
+        (
+            (r[0][2] - r[2][0]) / s,
+            (r[0][1] + r[1][0]) / s,
+            0.25 * s,
+            (r[1][2] + r[2][1]) / s,
+        )
+    } else {
+        let s = (1.0 + r[2][2] - r[0][0] - r[1][1]).sqrt() * 2.0;
+        (
+            (r[1][0] - r[0][1]) / s,
+            (r[0][2] + r[2][0]) / s,
+            (r[1][2] + r[2][1]) / s,
+            0.25 * s,
+        )
+    };
+
+    [w, x, y, z]
+}
+
+fn mat_mul_3x3(a: [[f64; 3]; 3], b: [[f64; 3]; 3]) -> [[f64; 3]; 3] {
+    let mut out = [[0.0; 3]; 3];
+    for i in 0..3 {
+        for j in 0..3 {
+            out[i][j] = a[i][0] * b[0][j] + a[i][1] * b[1][j] + a[i][2] * b[2][j];
+        }
+    }
+    out
+}
+
+/// Convert a quaternion from Elodin ENU/FLU to ArduPilot NED/FRD as [w, x, y, z].
+///
+/// Input `q_enu_xyzw` is expected in [x, y, z, w] order from `aleph.q_hat`.
+pub fn quat_enu_to_ned_wxyz(q_enu_xyzw: [f64; 4]) -> [f64; 4] {
+    let r_enu_flu = quat_xyzw_to_rotmat(q_enu_xyzw);
+    let c_w = [
+        [0.0, 1.0, 0.0], // ENU -> NED (world)
+        [1.0, 0.0, 0.0],
+        [0.0, 0.0, -1.0],
+    ];
+    let c_b = [
+        [1.0, 0.0, 0.0], // FRD -> FLU (body)
+        [0.0, -1.0, 0.0],
+        [0.0, 0.0, -1.0],
+    ];
+
+    let r_ned_frd = mat_mul_3x3(mat_mul_3x3(c_w, r_enu_flu), c_b);
+    rotmat_to_quat_wxyz(r_ned_frd)
+}
+
+/// Convert MEKF quaternion (`aleph.q_hat`) to ArduPilot [roll, pitch, yaw] in
+/// NED/FRD radians.
+pub fn mekf_quat_to_euler_ned(q_hat_xyzw: [f64; 4]) -> [f64; 3] {
+    let q = quat_enu_to_ned_wxyz(q_hat_xyzw);
+    let w = q[0];
+    let x = q[1];
+    let y = q[2];
+    let z = q[3];
+
+    let sinr_cosp = 2.0 * (w * x + y * z);
+    let cosr_cosp = 1.0 - 2.0 * (x * x + y * y);
+    let roll = sinr_cosp.atan2(cosr_cosp);
+
+    let sinp = 2.0 * (w * y - z * x);
+    let pitch = if sinp.abs() >= 1.0 {
+        sinp.signum() * std::f64::consts::FRAC_PI_2
+    } else {
+        sinp.asin()
+    };
+
+    let siny_cosp = 2.0 * (w * z + x * y);
+    let cosy_cosp = 1.0 - 2.0 * (y * y + z * z);
+    let yaw = siny_cosp.atan2(cosy_cosp);
+
+    [roll, pitch, yaw]
+}
+
+// ---------------------------------------------------------------------------
 // QMC5883L magnetometer conversions
 // ---------------------------------------------------------------------------
 

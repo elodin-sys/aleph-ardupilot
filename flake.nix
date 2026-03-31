@@ -119,7 +119,7 @@
 
         # Flight software
         sensor-fw
-        # mekf
+        mekf
         elodin-db
         aleph-serial-bridge
         tegrastats-bridge
