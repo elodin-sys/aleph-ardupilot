@@ -4,7 +4,6 @@ mod config;
 mod coordinate;
 mod elodin;
 mod hitl;
-mod imu_filter;
 
 use crate::ardupilot_ipc::{ServoOutput, SitlJsonPacket, ImuData};
 use crate::can_output::CanOutput;
@@ -15,7 +14,6 @@ use crate::coordinate::{
     qmc_raw_to_gauss,
 };
 use crate::elodin::{M10QInput, QMC5883LInput, MotorTelemetry, SensorInput};
-use crate::imu_filter::ConingIntegrator;
 
 use anyhow::Context;
 use clap::Parser;
@@ -62,16 +60,15 @@ impl Default for GpsCache {
     }
 }
 
-/// Cached filtered IMU output from the coning/sculling integrator.
-/// Written by the IMU background thread at ~400 Hz (every 4 raw samples),
-/// read by the main loop for JSON packet construction.
+/// Cached IMU sample from the STM32 pre-integrated stream (~750 Hz).
+/// Written by the IMU background thread, read by the main loop for
+/// JSON packet construction.
 #[derive(Debug, Clone, Copy)]
 struct ImuCache {
-    gyro: [f64; 3],      // coning-corrected FRD rad/s
-    accel: [f64; 3],     // sculling-corrected FRD m/s^2
+    gyro: [f64; 3],      // FRD rad/s
+    accel: [f64; 3],     // FRD m/s^2
     timestamp: f64,       // seconds since bridge start
-    seq: u64,             // monotonic output sequence number (~400 Hz)
-    raw_count: u64,       // total raw samples processed (~1500 Hz)
+    seq: u64,             // monotonic sample count
 }
 
 impl Default for ImuCache {
@@ -81,7 +78,6 @@ impl Default for ImuCache {
             accel: [0.0; 3],
             timestamp: 0.0,
             seq: 0,
-            raw_count: 0,
         }
     }
 }
@@ -222,9 +218,16 @@ async fn bridge_loop(
 
     let mut ap_addr: Option<SocketAddr> = None;
     let mut last_imu_seq: u64 = 0;
-    let mut output_tick: u64 = 0;
+
+    let mut rate_timer = std::time::Instant::now();
+    let mut json_sent: u64 = 0;
+    let mut servo_recv: u64 = 0;
+    let mut imu_skipped: u64 = 0;
+    let mut loop_iters: u64 = 0;
 
     loop {
+        loop_iters += 1;
+
         let mut servo_buf = [0u8; 256];
         if let Ok((n, src)) = udp_socket.recv_from(&mut servo_buf) {
             if let Some(servo) = ServoOutput::from_bytes(&servo_buf[..n]) {
@@ -232,6 +235,7 @@ async fn bridge_loop(
                     tracing::info!("ArduPilot connected from {}", src);
                 }
                 ap_addr = Some(src);
+                servo_recv += 1;
 
                 let motors_norm = servo.motors_normalized(config.num_motors);
                 let motor_pwm: [u16; 4] = [
@@ -284,8 +288,11 @@ async fn bridge_loop(
             stellarator::sleep(Duration::from_micros(500)).await;
             continue;
         }
+
+        let skipped = imu.seq.saturating_sub(last_imu_seq).saturating_sub(1);
+        imu_skipped += skipped;
         last_imu_seq = imu.seq;
-        output_tick += 1;
+        json_sent += 1;
 
         let gps = gps_cache.lock().unwrap();
         let (position, velocity) = if gps.has_fix {
@@ -297,17 +304,12 @@ async fn bridge_loop(
         let gps_fix = gps.has_fix;
         drop(gps);
 
-        // Roll/pitch from accelerometer gravity sensing.
-        // Negate sensed force to get gravity direction (positive Z = down in FRD).
         let gx = -imu.accel[0];
         let gy = -imu.accel[1];
         let gz = -imu.accel[2];
         let roll = gy.atan2(gz);
         let pitch = (-gx).atan2(gy * roll.sin() + gz * roll.cos());
-
-        // Yaw from GPS heading (avoids QMC5883L axis orientation unknowns).
         let yaw = if gps_fix { gps_yaw } else { 0.0 };
-
         let attitude = [roll, pitch, yaw];
 
         let packet = SitlJsonPacket {
@@ -326,20 +328,26 @@ async fn bridge_loop(
             .send_to(&json_bytes, target)
             .context("send sensor JSON to ArduPilot")?;
 
-        if output_tick % 400 == 0 {
-            let mag_c = mag_cache.lock().unwrap();
-            let gps_c = gps_cache.lock().unwrap();
+        let elapsed = rate_timer.elapsed();
+        if elapsed >= Duration::from_secs(1) {
+            let secs = elapsed.as_secs_f64();
+            let imu_db_hz = {
+                let c = imu_cache.lock().unwrap();
+                c.seq as f64 / c.timestamp.max(0.001)
+            };
             tracing::info!(
-                "out={} raw={} ratio={:.1} gps={} sats={} att=[{:.1},{:.1},{:.1}]deg mag={:.3}G",
-                output_tick,
-                imu.raw_count,
-                imu.raw_count as f64 / output_tick.max(1) as f64,
-                gps_c.has_fix, gps_c.satellites,
-                attitude[0].to_degrees(),
-                attitude[1].to_degrees(),
-                attitude[2].to_degrees(),
-                (mag_c.mag_frd[0].powi(2) + mag_c.mag_frd[1].powi(2) + mag_c.mag_frd[2].powi(2)).sqrt(),
+                "RATES: imu_from_db={:.0}Hz json_to_ap={:.0}Hz servo_from_ap={:.0}Hz imu_skipped={} loop={:.0}/s",
+                imu_db_hz,
+                json_sent as f64 / secs,
+                servo_recv as f64 / secs,
+                imu_skipped,
+                loop_iters as f64 / secs,
             );
+            rate_timer = std::time::Instant::now();
+            json_sent = 0;
+            servo_recv = 0;
+            imu_skipped = 0;
+            loop_iters = 0;
         }
     }
 }
@@ -349,7 +357,8 @@ async fn bridge_loop(
 // ---------------------------------------------------------------------------
 
 /// IMU subscription task. Runs in a dedicated thread with its own stellarator
-/// runtime and Elodin-DB connection. Updates the shared ImuCache at ~1500 Hz.
+/// runtime and Elodin-DB connection. Forwards pre-integrated samples from the
+/// STM32 (~750 Hz) to the ImuCache after FLU-to-FRD conversion.
 async fn imu_task(
     elodin_addr: String,
     cache: Arc<Mutex<ImuCache>>,
@@ -376,17 +385,12 @@ async fn imu_subscribe_loop(
     let mut sub = client.subscribe::<SensorInput>().await?;
     tracing::info!("IMU: subscribed to IMU vtable");
 
-    let mut integrator = ConingIntegrator::new();
-    let mut raw_count: u64 = 0;
-    let mut output_seq: u64 = 0;
-    let mut prev_ts = start.elapsed().as_secs_f64();
+    let mut seq: u64 = 0;
 
     loop {
         let input = sub.next().await?;
-        raw_count += 1;
+        seq += 1;
         let timestamp = start.elapsed().as_secs_f64();
-        let dt = timestamp - prev_ts;
-        prev_ts = timestamp;
 
         let gyro_frd = gyro_flu_to_frd([
             input.gyro[0] as f64,
@@ -399,22 +403,17 @@ async fn imu_subscribe_loop(
             input.accel[2] as f64,
         ]);
 
-        if let Some(filtered) = integrator.push(gyro_frd, accel_frd, dt) {
-            output_seq += 1;
-            {
-                let mut c = cache.lock().unwrap();
-                c.gyro = filtered.gyro;
-                c.accel = filtered.accel;
-                c.timestamp = timestamp;
-                c.seq = output_seq;
-                c.raw_count = raw_count;
-            }
+        {
+            let mut c = cache.lock().unwrap();
+            c.gyro = gyro_frd;
+            c.accel = accel_frd;
+            c.timestamp = timestamp;
+            c.seq = seq;
         }
 
-        if raw_count % 10000 == 1 {
-            tracing::info!("IMU: raw={} filtered={} ratio={:.1}",
-                raw_count, output_seq,
-                raw_count as f64 / output_seq.max(1) as f64);
+        if seq % 10000 == 1 {
+            let hz = seq as f64 / timestamp.max(0.001);
+            tracing::info!("IMU: samples={} rate={:.0} Hz", seq, hz);
         }
     }
 }

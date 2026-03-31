@@ -4,7 +4,7 @@ The ardupilot-bridge (running on the Aleph) connects to this simulation's
 Elodin-DB.  Data flows entirely through the DB -- the same code path as
 real hardware:
 
-    Simulation  -->  "IMU" entity (gyro/accel/mag f32)       -->  bridge subscribes
+    Simulation  -->  "IMU" entity (gyro/accel/mag f32)     -->  bridge subscribes
     Simulation  -->  "M10Q" entity (GPS UBX integers)      -->  bridge subscribes
     Simulation  -->  "QMC5883L" entity (compass i16 LSB)   -->  bridge subscribes
     bridge writes "ardupilot" entity (motor_command)       -->  Simulation reads
