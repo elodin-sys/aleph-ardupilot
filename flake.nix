@@ -52,7 +52,7 @@
   # Usage:
   #   nix develop --accept-flake-config
   #   elodin editor <aleph-ip>:2240
-  #   elodin run sim/ardupilot-hitl/main.py
+  #   elodin run sim/sim-hitl/main.py
   #   qgroundcontrol   # Linux only
   ###########################################################################
   flake-utils.lib.eachDefaultSystem (system: let
@@ -78,7 +78,7 @@
 
         echo "Aleph ArduPilot ground station shell"
         echo "  elodin editor <aleph-ip>:2240    - live telemetry viewer"
-        echo "  elodin run sim/ardupilot-hitl/main.py      - HITL simulation"
+        echo "  elodin run sim/sim-hitl/main.py             - HITL simulation"
       '' + pkgs.lib.optionalString pkgs.stdenv.isLinux ''
         echo "  qgroundcontrol                   - GCS for ArduPilot"
       '' + pkgs.lib.optionalString pkgs.stdenv.isDarwin ''
