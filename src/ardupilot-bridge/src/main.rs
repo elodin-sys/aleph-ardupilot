@@ -13,7 +13,7 @@ use crate::coordinate::{
     ubx_lla_to_ned, ubx_vel_to_ms, ubx_heading_to_rad,
     qmc_raw_to_gauss, mekf_quat_to_euler_ned, blend_angle,
 };
-use crate::elodin::{M10QInput, QMC5883LInput, MekfInput, MotorTelemetry, SensorInput};
+use crate::elodin::{GPSInput, QMC5883LInput, MekfInput, MotorTelemetry, SensorInput};
 
 use anyhow::Context;
 use clap::Parser;
@@ -473,7 +473,7 @@ async fn imu_subscribe_loop(
 }
 
 /// GPS subscription task. Reconnects on error.
-/// TODO: simulation -- synthetic M10Q rows from sim for HITL testing.
+/// TODO: simulation -- synthetic GPS rows from sim for HITL testing.
 async fn gps_task(
     elodin_addr: String,
     home: HomeLocation,
@@ -497,8 +497,8 @@ async fn gps_subscribe_loop(
 ) -> anyhow::Result<()> {
     let addr: SocketAddr = elodin_addr.parse().context("parse elodin addr for GPS")?;
     let mut client = Client::connect(addr).await.map_err(anyhow::Error::from)?;
-    let mut sub = client.subscribe::<M10QInput>().await?;
-    tracing::info!("GPS: subscribed to M10Q vtable");
+    let mut sub = client.subscribe::<GPSInput>().await?;
+    tracing::info!("GPS: subscribed to GPS vtable");
 
     let mut gps_tick: u64 = 0;
     loop {

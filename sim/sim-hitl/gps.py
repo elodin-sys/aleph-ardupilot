@@ -177,28 +177,33 @@ def gps_model(
     When ``gps_set == 0``: hold previous values (zero computation).
 
     Uses @el.map_seq so jax.lax.cond truly skips the conversion on
-    non-fire ticks (~755/760 per second).
+    non-fire ticks (~755/760 per second). Plain arrays are extracted
+    from spatial types before the cond to avoid IREE closure issues.
     """
-    def _compute_fix():
+    pos_enu = p.linear()
+    vel_enu = v.linear()
+
+    def _compute_fix(operand):
+        pe, ve = operand
         cfg = Config.GLOBAL
         home_lat_rad = jnp.deg2rad(cfg.home_lat)
-        pos_enu = p.linear()
-        vel_enu = v.linear()
-        vel_ned = jnp.array([vel_enu[1], vel_enu[0], -vel_enu[2]])
-        lat = cfg.home_lat + (pos_enu[1] / WGS84_A) * (180.0 / jnp.pi)
+        vel_ned = jnp.array([ve[1], ve[0], -ve[2]])
+        lat = cfg.home_lat + (pe[1] / WGS84_A) * (180.0 / jnp.pi)
         lon = cfg.home_lon + (
-            pos_enu[0] / (WGS84_A * jnp.cos(home_lat_rad))
+            pe[0] / (WGS84_A * jnp.cos(home_lat_rad))
         ) * (180.0 / jnp.pi)
-        alt = cfg.home_alt + pos_enu[2]
+        alt = cfg.home_alt + pe[2]
         gs = jnp.sqrt(vel_ned[0] ** 2 + vel_ned[1] ** 2)
         hdg = jnp.rad2deg(jnp.arctan2(vel_ned[1], vel_ned[0]))
         hdg = jnp.where(hdg < 0.0, hdg + 360.0, hdg)
         return lat, lon, alt, vel_ned, gs, hdg
 
-    def _hold_prev():
+    def _hold_prev(operand):
         return prev_lat, prev_lon, prev_alt, prev_vel, prev_gs, prev_hdg
 
-    return jax.lax.cond(gps_set == 1, _compute_fix, _hold_prev)
+    return jax.lax.cond(
+        gps_set == 1, _compute_fix, _hold_prev, (pos_enu, vel_enu)
+    )
 
 
 # Composed GPS system: timer -> model

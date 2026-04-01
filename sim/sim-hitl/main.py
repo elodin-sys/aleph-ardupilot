@@ -5,7 +5,7 @@ Elodin-DB.  Data flows entirely through the DB -- the same code path as
 real hardware:
 
     Simulation  -->  "imu" entity (gyro/accel/mag f32)      -->  bridge subscribes
-    Simulation  -->  "m10q" entity (GPS UBX integers)      -->  bridge subscribes
+    Simulation  -->  "ublox" entity (GPS UBX integers)      -->  bridge subscribes
     Simulation  -->  "aleph" entity (q_hat/baro/baro_temp) -->  bridge subscribes
     bridge writes "ardupilot" entity (motor_command)       -->  Simulation reads
 
@@ -62,63 +62,63 @@ SensorAccel = ty.Annotated[
     el.Component("accel", el.ComponentType(el.PrimitiveType.F32, (3,)), metadata=_EXT),
 ]
 
-M10QLat = ty.Annotated[
+GPSLat = ty.Annotated[
     jax.Array,
     el.Component("lat", el.ComponentType(el.PrimitiveType.I32, (1,)), metadata=_EXT),
 ]
-M10QLon = ty.Annotated[
+GPSLon = ty.Annotated[
     jax.Array,
     el.Component("lon", el.ComponentType(el.PrimitiveType.I32, (1,)), metadata=_EXT),
 ]
-M10QAltMsl = ty.Annotated[
+GPSAltMsl = ty.Annotated[
     jax.Array,
     el.Component("alt_msl", el.ComponentType(el.PrimitiveType.I32, (1,)), metadata=_EXT),
 ]
-M10QAltWgs84 = ty.Annotated[
+GPSAltWgs84 = ty.Annotated[
     jax.Array,
     el.Component("alt_wgs84", el.ComponentType(el.PrimitiveType.I32, (1,)), metadata=_EXT),
 ]
-M10QVelNed = ty.Annotated[
+GPSVelNed = ty.Annotated[
     jax.Array,
     el.Component("vel_ned", el.ComponentType(el.PrimitiveType.I32, (3,)), metadata=_EXT),
 ]
-M10QFixType = ty.Annotated[
+GPSFixType = ty.Annotated[
     jax.Array,
     el.Component("fix_type", el.ComponentType(el.PrimitiveType.U8, (1,)), metadata=_EXT),
 ]
-M10QSatellites = ty.Annotated[
+GPSSatellites = ty.Annotated[
     jax.Array,
     el.Component("satellites", el.ComponentType(el.PrimitiveType.U8, (1,)), metadata=_EXT),
 ]
-M10QHAcc = ty.Annotated[
+GPSHAcc = ty.Annotated[
     jax.Array,
     el.Component("h_acc", el.ComponentType(el.PrimitiveType.U32, (1,)), metadata=_EXT),
 ]
-M10QVAcc = ty.Annotated[
+GPSVAcc = ty.Annotated[
     jax.Array,
     el.Component("v_acc", el.ComponentType(el.PrimitiveType.U32, (1,)), metadata=_EXT),
 ]
-M10QSAcc = ty.Annotated[
+GPSSAcc = ty.Annotated[
     jax.Array,
     el.Component("s_acc", el.ComponentType(el.PrimitiveType.U32, (1,)), metadata=_EXT),
 ]
-M10QGroundSpeed = ty.Annotated[
+GPSGroundSpeed = ty.Annotated[
     jax.Array,
     el.Component("ground_speed", el.ComponentType(el.PrimitiveType.U32, (1,)), metadata=_EXT),
 ]
-M10QHeadingMotion = ty.Annotated[
+GPSHeadingMotion = ty.Annotated[
     jax.Array,
     el.Component("heading_motion", el.ComponentType(el.PrimitiveType.I32, (1,)), metadata=_EXT),
 ]
-M10QValidFlags = ty.Annotated[
+GPSValidFlags = ty.Annotated[
     jax.Array,
     el.Component("valid_flags", el.ComponentType(el.PrimitiveType.U8, (1,)), metadata=_EXT),
 ]
-M10QItow = ty.Annotated[
+GPSItow = ty.Annotated[
     jax.Array,
     el.Component("itow", el.ComponentType(el.PrimitiveType.U32, (1,)), metadata=_EXT),
 ]
-M10QUnixEpochMs = ty.Annotated[
+GPSUnixEpochMs = ty.Annotated[
     jax.Array,
     el.Component("unix_epoch_ms", el.ComponentType(el.PrimitiveType.I64, (1,)), metadata=_EXT),
 ]
@@ -132,22 +132,22 @@ class SensorOutput(el.Archetype):
 
 
 @dataclass
-class M10QOutput(el.Archetype):
-    lat: M10QLat = field(default_factory=lambda: jnp.zeros(1, dtype=jnp.int32))
-    lon: M10QLon = field(default_factory=lambda: jnp.zeros(1, dtype=jnp.int32))
-    alt_msl: M10QAltMsl = field(default_factory=lambda: jnp.zeros(1, dtype=jnp.int32))
-    alt_wgs84: M10QAltWgs84 = field(default_factory=lambda: jnp.zeros(1, dtype=jnp.int32))
-    vel_ned: M10QVelNed = field(default_factory=lambda: jnp.zeros(3, dtype=jnp.int32))
-    fix_type: M10QFixType = field(default_factory=lambda: jnp.zeros(1, dtype=jnp.uint8))
-    satellites: M10QSatellites = field(default_factory=lambda: jnp.zeros(1, dtype=jnp.uint8))
-    h_acc: M10QHAcc = field(default_factory=lambda: jnp.zeros(1, dtype=jnp.uint32))
-    v_acc: M10QVAcc = field(default_factory=lambda: jnp.zeros(1, dtype=jnp.uint32))
-    s_acc: M10QSAcc = field(default_factory=lambda: jnp.zeros(1, dtype=jnp.uint32))
-    ground_speed: M10QGroundSpeed = field(default_factory=lambda: jnp.zeros(1, dtype=jnp.uint32))
-    heading_motion: M10QHeadingMotion = field(default_factory=lambda: jnp.zeros(1, dtype=jnp.int32))
-    valid_flags: M10QValidFlags = field(default_factory=lambda: jnp.zeros(1, dtype=jnp.uint8))
-    itow: M10QItow = field(default_factory=lambda: jnp.zeros(1, dtype=jnp.uint32))
-    unix_epoch_ms: M10QUnixEpochMs = field(default_factory=lambda: jnp.zeros(1, dtype=jnp.int64))
+class GPSOutput(el.Archetype):
+    lat: GPSLat = field(default_factory=lambda: jnp.zeros(1, dtype=jnp.int32))
+    lon: GPSLon = field(default_factory=lambda: jnp.zeros(1, dtype=jnp.int32))
+    alt_msl: GPSAltMsl = field(default_factory=lambda: jnp.zeros(1, dtype=jnp.int32))
+    alt_wgs84: GPSAltWgs84 = field(default_factory=lambda: jnp.zeros(1, dtype=jnp.int32))
+    vel_ned: GPSVelNed = field(default_factory=lambda: jnp.zeros(3, dtype=jnp.int32))
+    fix_type: GPSFixType = field(default_factory=lambda: jnp.zeros(1, dtype=jnp.uint8))
+    satellites: GPSSatellites = field(default_factory=lambda: jnp.zeros(1, dtype=jnp.uint8))
+    h_acc: GPSHAcc = field(default_factory=lambda: jnp.zeros(1, dtype=jnp.uint32))
+    v_acc: GPSVAcc = field(default_factory=lambda: jnp.zeros(1, dtype=jnp.uint32))
+    s_acc: GPSSAcc = field(default_factory=lambda: jnp.zeros(1, dtype=jnp.uint32))
+    ground_speed: GPSGroundSpeed = field(default_factory=lambda: jnp.zeros(1, dtype=jnp.uint32))
+    heading_motion: GPSHeadingMotion = field(default_factory=lambda: jnp.zeros(1, dtype=jnp.int32))
+    valid_flags: GPSValidFlags = field(default_factory=lambda: jnp.zeros(1, dtype=jnp.uint8))
+    itow: GPSItow = field(default_factory=lambda: jnp.zeros(1, dtype=jnp.uint32))
+    unix_epoch_ms: GPSUnixEpochMs = field(default_factory=lambda: jnp.zeros(1, dtype=jnp.int64))
 
 AlephQHat = ty.Annotated[
     jax.Array,
@@ -191,11 +191,11 @@ drone = world.spawn(
 
 # Interface entities matching the bridge's VTable namespaces.
 # "imu"       -- gyro/accel/mag in f32 (BMM350 on-board mag)
-# "m10q"      -- GPS in UBX integer format
+# "ublox"      -- GPS in UBX integer format
 # "aleph"     -- MEKF attitude + baro
 # "ardupilot" -- motor data the bridge writes back
 imu = world.spawn([SensorOutput()], name="imu")
-m10q = world.spawn([M10QOutput()], name="m10q")
+ublox = world.spawn([GPSOutput()], name="ublox")
 aleph = world.spawn([AlephOutput()], name="aleph")
 ardupilot = world.spawn([], name="ardupilot")
 
@@ -355,21 +355,21 @@ def post_step(tick: int, ctx: el.StepContext):
         s_acc_mms = int(round(config.gps_sacc_std * 1e3))
 
         writes.update({
-            "m10q.lat": np.array([lat_e7], dtype=np.int32),
-            "m10q.lon": np.array([lon_e7], dtype=np.int32),
-            "m10q.alt_msl": np.array([alt_mm], dtype=np.int32),
-            "m10q.alt_wgs84": np.array([alt_mm], dtype=np.int32),
-            "m10q.vel_ned": np.array(vel_ned_mms, dtype=np.int32),
-            "m10q.fix_type": np.array([3], dtype=np.uint8),
-            "m10q.satellites": np.array([12], dtype=np.uint8),
-            "m10q.h_acc": np.array([h_acc_mm], dtype=np.uint32),
-            "m10q.v_acc": np.array([v_acc_mm], dtype=np.uint32),
-            "m10q.s_acc": np.array([s_acc_mms], dtype=np.uint32),
-            "m10q.ground_speed": np.array([gs_mms], dtype=np.uint32),
-            "m10q.heading_motion": np.array([hdg_e5], dtype=np.int32),
-            "m10q.valid_flags": np.array([0x37], dtype=np.uint8),
-            "m10q.itow": np.array([int(t * 1000) % 604800000], dtype=np.uint32),
-            "m10q.unix_epoch_ms": np.array([int(t * 1000)], dtype=np.int64),
+            "ublox.lat": np.array([lat_e7], dtype=np.int32),
+            "ublox.lon": np.array([lon_e7], dtype=np.int32),
+            "ublox.alt_msl": np.array([alt_mm], dtype=np.int32),
+            "ublox.alt_wgs84": np.array([alt_mm], dtype=np.int32),
+            "ublox.vel_ned": np.array(vel_ned_mms, dtype=np.int32),
+            "ublox.fix_type": np.array([3], dtype=np.uint8),
+            "ublox.satellites": np.array([12], dtype=np.uint8),
+            "ublox.h_acc": np.array([h_acc_mm], dtype=np.uint32),
+            "ublox.v_acc": np.array([v_acc_mm], dtype=np.uint32),
+            "ublox.s_acc": np.array([s_acc_mms], dtype=np.uint32),
+            "ublox.ground_speed": np.array([gs_mms], dtype=np.uint32),
+            "ublox.heading_motion": np.array([hdg_e5], dtype=np.int32),
+            "ublox.valid_flags": np.array([0x37], dtype=np.uint8),
+            "ublox.itow": np.array([int(t * 1000) % 604800000], dtype=np.uint32),
+            "ublox.unix_epoch_ms": np.array([int(t * 1000)], dtype=np.int64),
         })
 
     # Motors: ardupilot -> drone
@@ -424,7 +424,7 @@ print(f"DB path: {DB_PATH}")
 print()
 print("Data flows through the DB -- same code path as real hardware.")
 print('  Bridge reads: "imu" entity (gyro/accel/mag)')
-print('  Bridge reads: "m10q" entity (GPS UBX integers)')
+print('  Bridge reads: "ublox" entity (GPS UBX integers)')
 print('  Bridge reads: "aleph" entity (q_hat/baro/baro_temp)')
 print('  Bridge writes: "ardupilot" entity (motor_command/motor_pwm)')
 print()

@@ -2,9 +2,9 @@
 ///
 /// Sensor data arrives from the STM32 via serial-bridge into Elodin-DB
 /// under several vtable namespaces:
-///   "IMU"       -- gyro/accel/mag from on-board sensors (BMI270, BMM350) at ~1500 Hz
-///   "M10Q"      -- GPS from u-blox M10 via STM32 USART2 (J7 connector)
-///   "QMC5883L"  -- External compass from QMC5883L via STM32 I2C4 (J7 connector)
+///   "imu"       -- gyro/accel/mag from on-board sensors (BMI270, BMM350) at ~1500 Hz
+///   "ublox"      -- GPS from u-blox M10Q or NEO-M9N via STM32 USART2 (J7 connector)
+///   "qmc5883l"  -- External compass from QMC5883L via STM32 I2C4 (J7 connector)
 ///
 /// Motor telemetry is written back as a separate vtable for visualization
 /// in the Elodin Editor.
@@ -21,14 +21,14 @@ pub struct SensorInput {
     pub accel: [f32; 3],
 }
 
-/// GPS data from the Mateksys M10Q-5883 u-blox receiver.
+/// GPS data from the Mateksys M10Q-5883 or NEO-M9N u-blox receiver.
 /// All values use raw UBX-NAV-PVT integer units.
 /// repr(C, packed) ensures the struct layout matches the DB wire format
 /// exactly -- no alignment padding between fields of different sizes.
 #[derive(AsVTable, Default, Debug, Clone, TryFromBytes, Immutable, KnownLayout)]
-#[db(parent = "m10q")]
+#[db(parent = "ublox")]
 #[repr(C, packed)]
-pub struct M10QInput {
+pub struct GPSInput {
     pub lat: i32,              // 1e-7 degrees
     pub lon: i32,              // 1e-7 degrees
     pub alt_msl: i32,          // mm above mean sea level

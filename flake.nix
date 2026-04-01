@@ -20,8 +20,8 @@
   };
 
   inputs = {
-    aleph.url = "github:elodin-sys/elodin?rev=860b906b52a907cfa760259e7092ea65686f89a4&dir=aleph";
-    elodin.url = "github:elodin-sys/elodin?rev=860b906b52a907cfa760259e7092ea65686f89a4";
+    aleph.url = "github:elodin-sys/elodin?rev=b1b8e07dfe930f3367bedcf3ada67633d482e6c0&dir=aleph";
+    elodin.url = "github:elodin-sys/elodin?rev=b1b8e07dfe930f3367bedcf3ada67633d482e6c0";
     flake-utils.follows = "aleph/flake-utils";
     nixpkgs.follows = "aleph/nixpkgs";
 
@@ -149,7 +149,9 @@
         /run/current-system/sw/bin/nvpmodel --force -f /etc/nvpmodel.conf -m 0
       '';
 
-      services.serial-bridge.gpsClockSource = true;
+      # Uncomment ONE line to enable GPS-disciplined timestamping:
+      # services.sensor-fw.gps.model = "ublox";   # SAM-M10Q (9600 baud)
+      services.sensor-fw.gps.model = "m9n";    # NEO-M9N / M9N-5883 (38400 baud)
 
       services.arducopter = {
         enable = true;
