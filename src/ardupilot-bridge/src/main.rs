@@ -9,9 +9,9 @@ use crate::ardupilot_ipc::{ServoOutput, SitlJsonPacket, ImuData};
 use crate::can_output::CanOutput;
 use crate::config::{Config, HomeLocation};
 use crate::coordinate::{
-    gyro_flu_to_frd, accel_flu_to_frd,
+    accel_g_to_ms2, gyro_dps_to_rads,
     ubx_lla_to_ned, ubx_vel_to_ms, ubx_heading_to_rad,
-    qmc_raw_to_gauss, mekf_quat_to_euler_ned, blend_angle,
+    qmc_raw_to_gauss, mekf_quat_to_euler, blend_angle,
 };
 use crate::elodin::{GPSInput, QMC5883LInput, MekfInput, MotorTelemetry, SensorInput};
 
@@ -343,6 +343,8 @@ async fn bridge_loop(
             *c
         };
 
+        // Accel is specific force in FRD m/s²: level reads [0, 0, -g].
+        // Negate to get gravity direction (positive Z = down).
         let gx = -imu.accel[0];
         let gy = -imu.accel[1];
         let gz = -imu.accel[2];
@@ -411,8 +413,8 @@ async fn bridge_loop(
 // ---------------------------------------------------------------------------
 
 /// IMU subscription task. Runs in a dedicated thread with its own stellarator
-/// runtime and Elodin-DB connection. Forwards pre-integrated samples from the
-/// STM32 (~750 Hz) to the ImuCache after FLU-to-FRD conversion.
+/// runtime and Elodin-DB connection. Converts sensor-fw units (g, dps, FRD)
+/// to ArduPilot units (m/s², rad/s, FRD) and caches the latest sample.
 async fn imu_task(
     elodin_addr: String,
     cache: Arc<Mutex<ImuCache>>,
@@ -446,12 +448,12 @@ async fn imu_subscribe_loop(
         seq += 1;
         let timestamp = start.elapsed().as_secs_f64();
 
-        let gyro_frd = gyro_flu_to_frd([
+        let gyro = gyro_dps_to_rads([
             input.gyro[0] as f64,
             input.gyro[1] as f64,
             input.gyro[2] as f64,
         ]);
-        let accel_frd = accel_flu_to_frd([
+        let accel = accel_g_to_ms2([
             input.accel[0] as f64,
             input.accel[1] as f64,
             input.accel[2] as f64,
@@ -459,8 +461,8 @@ async fn imu_subscribe_loop(
 
         {
             let mut c = cache.lock().unwrap();
-            c.gyro = gyro_frd;
-            c.accel = accel_frd;
+            c.gyro = gyro;
+            c.accel = accel;
             c.timestamp = timestamp;
             c.seq = seq;
         }
@@ -606,7 +608,7 @@ async fn qmc5883l_subscribe_loop(
 }
 
 /// MEKF attitude subscription task. Reconnects on error.
-/// Subscribes to `aleph.q_hat`, converts ENU/FLU quaternion to NED/FRD Euler.
+/// Subscribes to `aleph.q_hat` and extracts NED/FRD Euler angles.
 async fn mekf_task(
     elodin_addr: String,
     cache: Arc<Mutex<AttitudeCache>>,
@@ -634,7 +636,7 @@ async fn mekf_subscribe_loop(
     let mut tick: u64 = 0;
     loop {
         let input = sub.next().await?;
-        let euler_ned = mekf_quat_to_euler_ned(input.q_hat);
+        let euler_ned = mekf_quat_to_euler(input.q_hat);
 
         {
             let mut c = cache.lock().unwrap();

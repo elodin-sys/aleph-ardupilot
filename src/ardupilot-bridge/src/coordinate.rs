@@ -1,141 +1,57 @@
-/// Coordinate frame conversions between Elodin (ENU/FLU) and ArduPilot (NED/FRD).
+/// Coordinate and unit conversions for the ardupilot-bridge.
 ///
-/// Elodin uses:
-///   - World frame: ENU (East-North-Up)
-///   - Body frame: FLU (Forward-Left-Up)
-///
-/// ArduPilot SITL expects:
-///   - World frame: NED (North-East-Down)
+/// Sensor data from the STM32 (via sensor-fw) arrives in:
 ///   - Body frame: FRD (Forward-Right-Down)
+///   - Accel units: g (1.0 = 9.80665 m/s²)
+///   - Gyro units: degrees/second
+///
+/// ArduPilot SITL JSON expects:
+///   - Body frame: FRD (same)
+///   - Accel units: m/s²
+///   - Gyro units: rad/s
+///
+/// The MEKF outputs q_hat as a scalar-last [x,y,z,w] quaternion in
+/// FRD body / NED-like world frame (gravity ref = [0,0,1]).
 
-/// Convert a 3-vector from ENU world frame to NED world frame.
-/// ENU [e, n, u] -> NED [n, e, -u]
-pub fn enu_to_ned(enu: [f64; 3]) -> [f64; 3] {
-    [enu[1], enu[0], -enu[2]]
-}
+pub const GRAVITY_MSS: f64 = 9.80665;
+const DEG_TO_RAD: f64 = std::f64::consts::PI / 180.0;
 
-/// Convert a 3-vector from FLU body frame to FRD body frame.
-/// FLU [f, l, u] -> FRD [f, -l, -u]
-pub fn flu_to_frd(flu: [f64; 3]) -> [f64; 3] {
-    [flu[0], -flu[1], -flu[2]]
-}
-
-/// Convert angular velocity from FLU to FRD.
-/// Same transformation as flu_to_frd: negate Y and Z.
-pub fn gyro_flu_to_frd(flu: [f64; 3]) -> [f64; 3] {
-    flu_to_frd(flu)
-}
-
-/// Convert acceleration from FLU to FRD.
-/// Same transformation as flu_to_frd: negate Y and Z.
-pub fn accel_flu_to_frd(flu: [f64; 3]) -> [f64; 3] {
-    flu_to_frd(flu)
-}
-
-// ---------------------------------------------------------------------------
-// MEKF quaternion conversions (Elodin ENU/FLU -> ArduPilot NED/FRD)
-// ---------------------------------------------------------------------------
-
-fn quat_xyzw_to_rotmat(q: [f64; 4]) -> [[f64; 3]; 3] {
-    let x = q[0];
-    let y = q[1];
-    let z = q[2];
-    let w = q[3];
-
-    let xx = x * x;
-    let yy = y * y;
-    let zz = z * z;
-    let xy = x * y;
-    let xz = x * z;
-    let yz = y * z;
-    let wx = w * x;
-    let wy = w * y;
-    let wz = w * z;
-
+/// Convert accelerometer reading from g to m/s².
+/// Sensor-fw outputs FRD with gravity as [0, 0, +1.0] g for a level drone.
+/// ArduPilot expects FRD specific force: [0, 0, -GRAVITY] m/s² for level.
+/// We negate to convert from "gravity direction" to "specific force" convention.
+pub fn accel_g_to_ms2(g: [f64; 3]) -> [f64; 3] {
     [
-        [1.0 - 2.0 * (yy + zz), 2.0 * (xy - wz), 2.0 * (xz + wy)],
-        [2.0 * (xy + wz), 1.0 - 2.0 * (xx + zz), 2.0 * (yz - wx)],
-        [2.0 * (xz - wy), 2.0 * (yz + wx), 1.0 - 2.0 * (xx + yy)],
+        -g[0] * GRAVITY_MSS,
+        -g[1] * GRAVITY_MSS,
+        -g[2] * GRAVITY_MSS,
     ]
 }
 
-fn rotmat_to_quat_wxyz(r: [[f64; 3]; 3]) -> [f64; 4] {
-    let trace = r[0][0] + r[1][1] + r[2][2];
-    let (w, x, y, z) = if trace > 0.0 {
-        let s = (trace + 1.0).sqrt() * 2.0;
-        (
-            0.25 * s,
-            (r[2][1] - r[1][2]) / s,
-            (r[0][2] - r[2][0]) / s,
-            (r[1][0] - r[0][1]) / s,
-        )
-    } else if r[0][0] > r[1][1] && r[0][0] > r[2][2] {
-        let s = (1.0 + r[0][0] - r[1][1] - r[2][2]).sqrt() * 2.0;
-        (
-            (r[2][1] - r[1][2]) / s,
-            0.25 * s,
-            (r[0][1] + r[1][0]) / s,
-            (r[0][2] + r[2][0]) / s,
-        )
-    } else if r[1][1] > r[2][2] {
-        let s = (1.0 + r[1][1] - r[0][0] - r[2][2]).sqrt() * 2.0;
-        (
-            (r[0][2] - r[2][0]) / s,
-            (r[0][1] + r[1][0]) / s,
-            0.25 * s,
-            (r[1][2] + r[2][1]) / s,
-        )
-    } else {
-        let s = (1.0 + r[2][2] - r[0][0] - r[1][1]).sqrt() * 2.0;
-        (
-            (r[1][0] - r[0][1]) / s,
-            (r[0][2] + r[2][0]) / s,
-            (r[1][2] + r[2][1]) / s,
-            0.25 * s,
-        )
-    };
-
-    [w, x, y, z]
+/// Convert gyroscope reading from degrees/second to radians/second.
+/// No frame conversion needed -- sensor-fw already outputs FRD.
+pub fn gyro_dps_to_rads(dps: [f64; 3]) -> [f64; 3] {
+    [
+        dps[0] * DEG_TO_RAD,
+        dps[1] * DEG_TO_RAD,
+        dps[2] * DEG_TO_RAD,
+    ]
 }
 
-fn mat_mul_3x3(a: [[f64; 3]; 3], b: [[f64; 3]; 3]) -> [[f64; 3]; 3] {
-    let mut out = [[0.0; 3]; 3];
-    for i in 0..3 {
-        for j in 0..3 {
-            out[i][j] = a[i][0] * b[0][j] + a[i][1] * b[1][j] + a[i][2] * b[2][j];
-        }
-    }
-    out
-}
+// ---------------------------------------------------------------------------
+// MEKF quaternion -> Euler (NED/FRD)
+// ---------------------------------------------------------------------------
 
-/// Convert a quaternion from Elodin ENU/FLU to ArduPilot NED/FRD as [w, x, y, z].
+/// Convert MEKF quaternion to ArduPilot [roll, pitch, yaw] in NED/FRD radians.
 ///
-/// Input `q_enu_xyzw` is expected in [x, y, z, w] order from `aleph.q_hat`.
-pub fn quat_enu_to_ned_wxyz(q_enu_xyzw: [f64; 4]) -> [f64; 4] {
-    let r_enu_flu = quat_xyzw_to_rotmat(q_enu_xyzw);
-    let c_w = [
-        [0.0, 1.0, 0.0], // ENU -> NED (world)
-        [1.0, 0.0, 0.0],
-        [0.0, 0.0, -1.0],
-    ];
-    let c_b = [
-        [1.0, 0.0, 0.0], // FRD -> FLU (body)
-        [0.0, -1.0, 0.0],
-        [0.0, 0.0, -1.0],
-    ];
-
-    let r_ned_frd = mat_mul_3x3(mat_mul_3x3(c_w, r_enu_flu), c_b);
-    rotmat_to_quat_wxyz(r_ned_frd)
-}
-
-/// Convert MEKF quaternion (`aleph.q_hat`) to ArduPilot [roll, pitch, yaw] in
-/// NED/FRD radians.
-pub fn mekf_quat_to_euler_ned(q_hat_xyzw: [f64; 4]) -> [f64; 3] {
-    let q = quat_enu_to_ned_wxyz(q_hat_xyzw);
-    let w = q[0];
-    let x = q[1];
-    let y = q[2];
-    let z = q[3];
+/// The MEKF already operates in FRD body frame with gravity reference [0,0,1]
+/// (NED-like world frame), so no frame rotation is needed -- just extract
+/// Euler angles directly from the scalar-last [x,y,z,w] quaternion.
+pub fn mekf_quat_to_euler(q_xyzw: [f64; 4]) -> [f64; 3] {
+    let x = q_xyzw[0];
+    let y = q_xyzw[1];
+    let z = q_xyzw[2];
+    let w = q_xyzw[3];
 
     let sinr_cosp = 2.0 * (w * x + y * z);
     let cosr_cosp = 1.0 - 2.0 * (x * x + y * y);
@@ -177,10 +93,10 @@ pub fn qmc_raw_to_gauss(raw: [i16; 3]) -> [f64; 3] {
 /// Compute [roll, pitch, yaw] in NED/FRD radians from accelerometer and
 /// magnetometer readings in body frame.
 ///
-/// The accelerometer input is *sensed force* in FRD (a level drone reads
-/// approximately [0, 0, -9.81]).  The formula internally negates it to get
-/// the gravity direction vector (positive Z = down in FRD) before computing
-/// roll and pitch.
+/// The accelerometer input is *specific force* in FRD m/s² (a level drone
+/// reads approximately [0, 0, -9.81]).  The formula internally negates it
+/// to get the gravity direction vector (positive Z = down in FRD) before
+/// computing roll and pitch.
 ///
 /// The magnetometer input is in the QMC5883L sensor frame, which is treated
 /// as aligned with FRD for now. The yaw is derived after tilt compensation.
