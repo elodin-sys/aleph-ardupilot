@@ -148,7 +148,7 @@ def advance_gps_timer(
     )
 
 
-@el.map
+@el.map_seq
 def gps_model(
     gps_set: GpsSet,
     p: el.WorldPos,
@@ -174,38 +174,31 @@ def gps_model(
       2. Convert ENU position to LLA via flat-earth approximation.
       3. Convert ENU velocity to NED.
       4. Compute ground speed and heading of motion.
-    When ``gps_set == 0``: hold previous values.
+    When ``gps_set == 0``: hold previous values (zero computation).
 
-    Noise is NOT applied here -- it is injected per-fix in post_step
-    using numpy PRNG to avoid JAX u64 tracing issues.
+    Uses @el.map_seq so jax.lax.cond truly skips the conversion on
+    non-fire ticks (~755/760 per second).
     """
-    cfg = Config.GLOBAL
-    home_lat_rad = jnp.deg2rad(cfg.home_lat)
+    def _compute_fix():
+        cfg = Config.GLOBAL
+        home_lat_rad = jnp.deg2rad(cfg.home_lat)
+        pos_enu = p.linear()
+        vel_enu = v.linear()
+        vel_ned = jnp.array([vel_enu[1], vel_enu[0], -vel_enu[2]])
+        lat = cfg.home_lat + (pos_enu[1] / WGS84_A) * (180.0 / jnp.pi)
+        lon = cfg.home_lon + (
+            pos_enu[0] / (WGS84_A * jnp.cos(home_lat_rad))
+        ) * (180.0 / jnp.pi)
+        alt = cfg.home_alt + pos_enu[2]
+        gs = jnp.sqrt(vel_ned[0] ** 2 + vel_ned[1] ** 2)
+        hdg = jnp.rad2deg(jnp.arctan2(vel_ned[1], vel_ned[0]))
+        hdg = jnp.where(hdg < 0.0, hdg + 360.0, hdg)
+        return lat, lon, alt, vel_ned, gs, hdg
 
-    pos_enu = p.linear()
-    vel_enu = v.linear()
+    def _hold_prev():
+        return prev_lat, prev_lon, prev_alt, prev_vel, prev_gs, prev_hdg
 
-    vel_ned = jnp.array([vel_enu[1], vel_enu[0], -vel_enu[2]])
-
-    lat = cfg.home_lat + (pos_enu[1] / WGS84_A) * (180.0 / jnp.pi)
-    lon = cfg.home_lon + (
-        pos_enu[0] / (WGS84_A * jnp.cos(home_lat_rad))
-    ) * (180.0 / jnp.pi)
-    alt = cfg.home_alt + pos_enu[2]
-
-    gs = jnp.sqrt(vel_ned[0] ** 2 + vel_ned[1] ** 2)
-    hdg = jnp.rad2deg(jnp.arctan2(vel_ned[1], vel_ned[0]))
-    hdg = jnp.where(hdg < 0.0, hdg + 360.0, hdg)
-
-    fire = gps_set == 1
-    new_lat = jnp.where(fire, lat, prev_lat)
-    new_lon = jnp.where(fire, lon, prev_lon)
-    new_alt = jnp.where(fire, alt, prev_alt)
-    new_vel = jnp.where(fire, vel_ned, prev_vel)
-    new_gs = jnp.where(fire, gs, prev_gs)
-    new_hdg = jnp.where(fire, hdg, prev_hdg)
-
-    return new_lat, new_lon, new_alt, new_vel, new_gs, new_hdg
+    return jax.lax.cond(gps_set == 1, _compute_fix, _hold_prev)
 
 
 # Composed GPS system: timer -> model

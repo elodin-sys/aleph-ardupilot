@@ -262,144 +262,148 @@ _gps_rng = np.random.default_rng(42)
 _baro_rng = np.random.default_rng(99)
 _home_lat_rad = math.radians(config.home_lat)
 
+_mag_interval = max(1, round(0.01 / config.dt))     # ~100 Hz
+_baro_interval = max(1, round(1.0 / (10.0 * config.dt)))  # ~10 Hz
+
+_MOTOR_ZEROS = np.zeros(4, dtype=np.float64)
+
 
 def post_step(tick: int, ctx: el.StepContext):
-    """Copy sensor data from drone -> IMU/M10Q, motor commands from ardupilot -> drone."""
+    """Bridge sensor data and motor commands using batched DB operations."""
     if _start_time[0] is None:
         _start_time[0] = time.time()
 
     t = tick * config.dt
+    do_mag = tick % _mag_interval == 0
+    do_baro = tick % _baro_interval == 0
 
-    # --- IMU: drone (f64) -> IMU entity (f32) ---
+    # ------------------------------------------------------------------
+    # Batched read: one DB lock acquisition for all component reads
+    # ------------------------------------------------------------------
+    reads = ["drone.sim_gyro", "drone.sim_accel", "drone.world_pos",
+             "drone.gps_set", "ardupilot.motor_command", "ardupilot.motor_pwm"]
+    if do_mag:
+        reads.append("drone.magnetometer")
+
     try:
-        gyro = np.array(ctx.read_component("drone.sim_gyro"), dtype=np.float32)
-        accel = np.array(ctx.read_component("drone.sim_accel"), dtype=np.float32)
-        accel = accel / 9.80665  # m/s^2 -> g (real IMU reports in g)
-        mag = np.array(ctx.read_component("drone.magnetometer"), dtype=np.float32)
+        data = ctx.component_batch_operation(reads=reads)
+    except (RuntimeError, ValueError):
+        return
 
-        ctx.write_component("imu.gyro", gyro)
-        ctx.write_component("imu.accel", accel)
-        ctx.write_component("imu.mag", mag)
-    except RuntimeError:
-        pass
+    # ------------------------------------------------------------------
+    # Process sensor data (pure Python, no FFI)
+    # ------------------------------------------------------------------
+    gyro = np.array(data["drone.sim_gyro"], dtype=np.float32)
+    accel = np.array(data["drone.sim_accel"], dtype=np.float32) / 9.80665
 
-    # --- Aleph MEKF: physics truth quaternion -> aleph.q_hat ---
-    try:
-        world_pos = np.array(ctx.read_component("drone.world_pos"), dtype=np.float64)
-        q_hat = world_pos[:4]  # [qx, qy, qz, qw] -- already xyzw order
-        ctx.write_component("aleph.q_hat", q_hat)
-    except RuntimeError:
-        pass
+    world_pos = np.array(data["drone.world_pos"], dtype=np.float64)
+    q_hat = world_pos[:4]
 
-    # --- Aleph baro: altitude -> pressure model at ~10 Hz ---
-    baro_interval = max(1, round(1.0 / (10.0 * config.dt)))
-    if tick % baro_interval == 0:
-        try:
-            world_pos_b = np.array(ctx.read_component("drone.world_pos"), dtype=np.float64)
-            alt_m = float(world_pos_b[6]) + config.home_alt
-            pressure = 101325.0 * (1.0 - 2.2558e-5 * alt_m) ** 5.2559
-            pressure += _baro_rng.normal(0, 0.5)
-            temp = 39.8 + _baro_rng.normal(0, 0.01)
-            ctx.write_component("aleph.baro", np.array([pressure], dtype=np.float64))
-            ctx.write_component("aleph.baro_temp", np.array([temp], dtype=np.float64))
-        except RuntimeError:
-            pass
+    writes: dict[str, np.ndarray] = {
+        "imu.gyro": gyro,
+        "imu.accel": accel,
+        "aleph.q_hat": q_hat,
+    }
 
-    # --- GPS: drone (f64 truth) -> noise -> M10Q entity (UBX integers) ---
-    # Noise is injected here using numpy PRNG (not JAX) so each fix gets
-    # an independent random draw.
-    try:
-        gps_set_raw = np.array(ctx.read_component("drone.gps_set"))
-        gps_set_val = int(gps_set_raw.flat[0])
-    except RuntimeError:
-        gps_set_val = 0
+    # Mag at ~100 Hz
+    if do_mag:
+        writes["imu.mag"] = np.array(data["drone.magnetometer"], dtype=np.float32)
 
+    # Baro at ~10 Hz
+    if do_baro:
+        alt_m = float(world_pos[6]) + config.home_alt
+        pressure = 101325.0 * (1.0 - 2.2558e-5 * alt_m) ** 5.2559
+        pressure += _baro_rng.normal(0, 0.5)
+        temp = 39.8 + _baro_rng.normal(0, 0.01)
+        writes["aleph.baro"] = np.array([pressure], dtype=np.float64)
+        writes["aleph.baro_temp"] = np.array([temp], dtype=np.float64)
+
+    # GPS at ~5 Hz (gated by physics gps_set flag)
+    gps_set_val = int(np.array(data["drone.gps_set"]).flat[0])
     if gps_set_val:
-        try:
-            lat_truth = float(np.array(ctx.read_component("drone.gps_lat")).flat[0])
-            lon_truth = float(np.array(ctx.read_component("drone.gps_lon")).flat[0])
-            alt_truth = float(np.array(ctx.read_component("drone.gps_alt_msl")).flat[0])
-            vel_truth = np.array(ctx.read_component("drone.gps_vel_ned"), dtype=np.float64).flatten()
+        gps_reads = ctx.component_batch_operation(
+            reads=["drone.gps_lat", "drone.gps_lon",
+                   "drone.gps_alt_msl", "drone.gps_vel_ned"])
 
-            # Per-fix Gaussian noise matching M10Q observed characteristics
-            pos_noise_m = _gps_rng.normal(0, config.gps_hacc_std, size=2)
-            alt_noise_m = _gps_rng.normal(0, config.gps_vacc_std)
-            vel_noise_ms = _gps_rng.normal(0, config.gps_sacc_std, size=3)
+        lat_truth = float(np.array(gps_reads["drone.gps_lat"]).flat[0])
+        lon_truth = float(np.array(gps_reads["drone.gps_lon"]).flat[0])
+        alt_truth = float(np.array(gps_reads["drone.gps_alt_msl"]).flat[0])
+        vel_truth = np.array(gps_reads["drone.gps_vel_ned"], dtype=np.float64).flatten()
 
-            lat = lat_truth + pos_noise_m[0] / WGS84_A * (180.0 / math.pi)
-            lon = lon_truth + pos_noise_m[1] / (WGS84_A * math.cos(_home_lat_rad)) * (180.0 / math.pi)
-            alt = alt_truth + alt_noise_m
-            vel = vel_truth + vel_noise_ms
+        pos_noise_m = _gps_rng.normal(0, config.gps_hacc_std, size=2)
+        alt_noise_m = _gps_rng.normal(0, config.gps_vacc_std)
+        vel_noise_ms = _gps_rng.normal(0, config.gps_sacc_std, size=3)
 
-            gs = math.sqrt(vel[0] ** 2 + vel[1] ** 2)
-            hdg = math.degrees(math.atan2(vel[1], vel[0]))
-            if hdg < 0:
-                hdg += 360.0
+        lat = lat_truth + pos_noise_m[0] / WGS84_A * (180.0 / math.pi)
+        lon = lon_truth + pos_noise_m[1] / (WGS84_A * math.cos(_home_lat_rad)) * (180.0 / math.pi)
+        alt = alt_truth + alt_noise_m
+        vel = vel_truth + vel_noise_ms
 
-            lat_e7 = int(round(lat * 1e7))
-            lon_e7 = int(round(lon * 1e7))
-            alt_mm = int(round(alt * 1e3))
-            vel_ned_mms = [int(round(v * 1e3)) for v in vel]
-            gs_mms = int(round(gs * 1e3))
-            hdg_e5 = int(round(hdg * 1e5))
-            h_acc_mm = int(round(config.gps_hacc_std * 1e3))
-            v_acc_mm = int(round(config.gps_vacc_std * 1e3))
-            s_acc_mms = int(round(config.gps_sacc_std * 1e3))
+        gs = math.sqrt(vel[0] ** 2 + vel[1] ** 2)
+        hdg = math.degrees(math.atan2(vel[1], vel[0]))
+        if hdg < 0:
+            hdg += 360.0
 
-            ctx.write_component("m10q.lat", np.array([lat_e7], dtype=np.int32))
-            ctx.write_component("m10q.lon", np.array([lon_e7], dtype=np.int32))
-            ctx.write_component("m10q.alt_msl", np.array([alt_mm], dtype=np.int32))
-            ctx.write_component("m10q.alt_wgs84", np.array([alt_mm], dtype=np.int32))
-            ctx.write_component("m10q.vel_ned", np.array(vel_ned_mms, dtype=np.int32))
-            ctx.write_component("m10q.fix_type", np.array([3], dtype=np.uint8))
-            ctx.write_component("m10q.satellites", np.array([12], dtype=np.uint8))
-            ctx.write_component("m10q.h_acc", np.array([h_acc_mm], dtype=np.uint32))
-            ctx.write_component("m10q.v_acc", np.array([v_acc_mm], dtype=np.uint32))
-            ctx.write_component("m10q.s_acc", np.array([s_acc_mms], dtype=np.uint32))
-            ctx.write_component("m10q.ground_speed", np.array([gs_mms], dtype=np.uint32))
-            ctx.write_component("m10q.heading_motion", np.array([hdg_e5], dtype=np.int32))
-            ctx.write_component("m10q.valid_flags", np.array([0x37], dtype=np.uint8))
-            ctx.write_component("m10q.itow", np.array([int(t * 1000) % 604800000], dtype=np.uint32))
-            ctx.write_component("m10q.unix_epoch_ms", np.array([int(t * 1000)], dtype=np.int64))
-        except RuntimeError:
-            pass
+        lat_e7 = int(round(lat * 1e7))
+        lon_e7 = int(round(lon * 1e7))
+        alt_mm = int(round(alt * 1e3))
+        vel_ned_mms = [int(round(v * 1e3)) for v in vel]
+        gs_mms = int(round(gs * 1e3))
+        hdg_e5 = int(round(hdg * 1e5))
+        h_acc_mm = int(round(config.gps_hacc_std * 1e3))
+        v_acc_mm = int(round(config.gps_vacc_std * 1e3))
+        s_acc_mms = int(round(config.gps_sacc_std * 1e3))
 
-    # --- Motors: ardupilot -> drone ---
+        writes.update({
+            "m10q.lat": np.array([lat_e7], dtype=np.int32),
+            "m10q.lon": np.array([lon_e7], dtype=np.int32),
+            "m10q.alt_msl": np.array([alt_mm], dtype=np.int32),
+            "m10q.alt_wgs84": np.array([alt_mm], dtype=np.int32),
+            "m10q.vel_ned": np.array(vel_ned_mms, dtype=np.int32),
+            "m10q.fix_type": np.array([3], dtype=np.uint8),
+            "m10q.satellites": np.array([12], dtype=np.uint8),
+            "m10q.h_acc": np.array([h_acc_mm], dtype=np.uint32),
+            "m10q.v_acc": np.array([v_acc_mm], dtype=np.uint32),
+            "m10q.s_acc": np.array([s_acc_mms], dtype=np.uint32),
+            "m10q.ground_speed": np.array([gs_mms], dtype=np.uint32),
+            "m10q.heading_motion": np.array([hdg_e5], dtype=np.int32),
+            "m10q.valid_flags": np.array([0x37], dtype=np.uint8),
+            "m10q.itow": np.array([int(t * 1000) % 604800000], dtype=np.uint32),
+            "m10q.unix_epoch_ms": np.array([int(t * 1000)], dtype=np.int64),
+        })
+
+    # Motors: ardupilot -> drone
     try:
-        motor_cmd_f32 = np.array(ctx.read_component("ardupilot.motor_command"))
-        ctx.write_component("drone.motor_command", motor_cmd_f32.astype(np.float64))
-    except RuntimeError:
-        ctx.write_component("drone.motor_command", np.zeros(4, dtype=np.float64))
-
+        motor_cmd = np.array(data["ardupilot.motor_command"]).astype(np.float64)
+    except (KeyError, RuntimeError):
+        motor_cmd = _MOTOR_ZEROS
     try:
-        motor_pwm_u16 = np.array(ctx.read_component("ardupilot.motor_pwm"))
-        ctx.write_component("drone.motor_pwm", motor_pwm_u16.astype(np.float64))
-    except RuntimeError:
-        ctx.write_component("drone.motor_pwm", np.zeros(4, dtype=np.float64))
+        motor_pwm = np.array(data["ardupilot.motor_pwm"]).astype(np.float64)
+    except (KeyError, RuntimeError):
+        motor_pwm = _MOTOR_ZEROS
 
-    # Periodic status
+    writes["drone.motor_command"] = motor_cmd
+    writes["drone.motor_pwm"] = motor_pwm
+
+    # ------------------------------------------------------------------
+    # Batched write: one DB lock acquisition for all component writes
+    # ------------------------------------------------------------------
+    try:
+        ctx.component_batch_operation(writes=writes)
+    except (RuntimeError, ValueError):
+        pass
+
+    # Periodic status (uses its own reads to avoid bloating the hot path)
     if t - _last_print[0] >= 1.0:
         _last_print[0] = t
         elapsed = time.time() - _start_time[0]
         rtf = t / elapsed if elapsed > 0 else 0
-        try:
-            pos = np.array(ctx.read_component("drone.world_pos"))
-            z = pos[6] if len(pos) > 6 else 0.0
-            cmd = np.array(ctx.read_component("drone.motor_command"))
-            gps_info = ""
-            try:
-                glat = float(np.array(ctx.read_component("drone.gps_lat")).flat[0])
-                glon = float(np.array(ctx.read_component("drone.gps_lon")).flat[0])
-                gps_info = f" | gps=({glat:.4f},{glon:.4f})"
-            except RuntimeError:
-                gps_info = " | gps=n/a"
-            print(
-                f"  t={t:5.1f}s | z={z:+.2f}m | "
-                f"motors=[{cmd[0]:.3f},{cmd[1]:.3f},{cmd[2]:.3f},{cmd[3]:.3f}] | "
-                f"{rtf:.1f}x RT{gps_info}"
-            )
-        except Exception:
-            print(f"  t={t:5.1f}s | (waiting for data)")
+        z = float(world_pos[6]) if len(world_pos) > 6 else 0.0
+        print(
+            f"  t={t:5.1f}s | z={z:+.2f}m | "
+            f"motors=[{motor_cmd[0]:.3f},{motor_cmd[1]:.3f},{motor_cmd[2]:.3f},{motor_cmd[3]:.3f}] | "
+            f"{rtf:.1f}x RT"
+        )
 
 
 # ---------------------------------------------------------------------------

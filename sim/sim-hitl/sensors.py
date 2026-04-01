@@ -164,7 +164,7 @@ def accel_system(
     return (new_delay, new_delay[2])
 
 
-@el.map
+@el.map_seq
 def mag_system(
     tick: SensorTick,
     p: el.WorldPos,
