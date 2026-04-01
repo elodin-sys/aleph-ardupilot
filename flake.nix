@@ -20,8 +20,8 @@
   };
 
   inputs = {
-    aleph.url = "github:elodin-sys/elodin?rev=b1b8e07dfe930f3367bedcf3ada67633d482e6c0&dir=aleph";
-    elodin.url = "github:elodin-sys/elodin?rev=b1b8e07dfe930f3367bedcf3ada67633d482e6c0";
+    aleph.url = "github:elodin-sys/elodin?rev=27718da2dff4449d6d4d6bf87f413df9919885dc&dir=aleph";
+    elodin.url = "github:elodin-sys/elodin?rev=27718da2dff4449d6d4d6bf87f413df9919885dc";
     flake-utils.follows = "aleph/flake-utils";
     nixpkgs.follows = "aleph/nixpkgs";
 
@@ -158,7 +158,7 @@
         model = "JSON";
         homeLocation = "37.7749,-122.4194,10,270";
         defaultsFile = ./src/ardupilot-defaults.param;
-        extraFlags = [ "--serial0" "udpclient:192.168.4.102:14550" ];
+        extraFlags = [ "--serial0" "udpclient:192.168.4.182:14550" ];
       };
 
       environment.systemPackages = with pkgs; [
@@ -219,7 +219,7 @@
       # Bridge points at the laptop's Elodin-DB.
       services.ardupilot-bridge = {
         enable = true;
-        elodinAddr = "192.168.4.102:2240";
+        elodinAddr = "192.168.4.182:2240";
         hitlPort = 0;
       };
     };
