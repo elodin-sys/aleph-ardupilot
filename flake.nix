@@ -20,8 +20,8 @@
   };
 
   inputs = {
-    aleph.url = "github:elodin-sys/elodin?rev=27718da2dff4449d6d4d6bf87f413df9919885dc&dir=aleph";
-    elodin.url = "github:elodin-sys/elodin?rev=27718da2dff4449d6d4d6bf87f413df9919885dc";
+    aleph.url = "github:elodin-sys/elodin?rev=1560dfe28351a266840ae8fbfef4138c9a09d70f&dir=aleph";
+    elodin.url = "github:elodin-sys/elodin?rev=1560dfe28351a266840ae8fbfef4138c9a09d70f";
     flake-utils.follows = "aleph/flake-utils";
     nixpkgs.follows = "aleph/nixpkgs";
 

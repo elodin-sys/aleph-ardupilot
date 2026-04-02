@@ -7,6 +7,7 @@ ArduCopter on the [Elodin Aleph](https://github.com/elodin-sys/elodin/tree/main/
 - [Determinate Systems Nix](https://install.determinate.systems/nix)
 - An Aleph flight computer with the base NixOS image flashed
 - Network connectivity to the Aleph (WiFi or USB ethernet)
+- Local install of [QGroundControl](https://github.com/mavlink/qgroundcontrol/releases)
 
 ## SSH Setup
 
@@ -33,6 +34,7 @@ The first deployment to a fresh Aleph requires `root`/`root` (password auth). Af
 **1. Enter the dev shell**
 
 ```bash
+# From scratch this can take around 20-30 minutes
 nix develop --accept-flake-config
 ```
 
@@ -92,6 +94,7 @@ journalctl -u ardupilot-bridge -f
 - [Elodin](https://github.com/elodin-sys/elodin) / [Docs](https://docs.elodin.systems)
 - [ArduPilot](https://ardupilot.org/dev/)
 - [NixOS](https://nixos.org/manual/nixos/stable/)
+- [QGoundControl](https://github.com/mavlink/qgroundcontrol)
 
 ## License
 
