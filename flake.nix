@@ -150,8 +150,8 @@
       '';
 
       # Uncomment ONE line to enable GPS-disciplined timestamping:
-      # services.sensor-fw.gps.model = "m10q";   # SAM-M10Q (9600 baud)
-      services.sensor-fw.gps.model = "m9n";    # NEO-M9N / M9N-5883 (38400 baud)
+      services.sensor-fw.gps.model = "m10q";   # SAM-M10Q (9600 baud)
+      # services.sensor-fw.gps.model = "m9n";    # NEO-M9N / M9N-5883 (38400 baud)
 
       services.arducopter = {
         enable = true;

@@ -100,6 +100,7 @@ dependencies = [
  "clap",
  "db-macros",
  "fastrand",
+ "futures-lite",
  "impeller2",
  "impeller2-stellar",
  "impeller2-wkt",

@@ -22,3 +22,4 @@ impeller2-wkt = { git = "https://github.com/elodin-sys/elodin.git", rev = "80f22
 stellarator = { git = "https://github.com/elodin-sys/elodin.git", rev = "80f226daf08f9fb9819adbe2e711e8eec2f83543", features = ["miette"] }
 db-macros = { git = "https://github.com/elodin-sys/elodin.git", rev = "80f226daf08f9fb9819adbe2e711e8eec2f83543" }
 fastrand = "2"
+futures-lite = "2"

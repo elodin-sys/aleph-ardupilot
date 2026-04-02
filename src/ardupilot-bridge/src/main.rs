@@ -28,6 +28,39 @@ fn main() -> anyhow::Result<()> {
     stellarator::run(run)
 }
 
+const SUBSCRIBE_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Race a subscription's first `.next()` against a timeout.
+///
+/// Elodin-DB subscriptions created before a vtable has any data (e.g. before
+/// the serial-bridge acquires a GPS clock lock and starts writing) can block
+/// forever.  This helper ensures we bail out and let the outer retry loop
+/// reconnect once data is actually available.
+async fn subscribe_timeout<T, E>(
+    next: impl std::future::Future<Output = Result<T, E>>,
+    label: &str,
+) -> anyhow::Result<T>
+where
+    E: std::fmt::Display,
+{
+    futures_lite::future::race(
+        async {
+            match next.await {
+                Ok(v) => Ok(v),
+                Err(e) => Err(anyhow::anyhow!("{label}: subscribe error: {e}")),
+            }
+        },
+        async {
+            stellarator::sleep(SUBSCRIBE_TIMEOUT).await;
+            Err(anyhow::anyhow!(
+                "{label}: no data within {}s of subscribing, reconnecting",
+                SUBSCRIBE_TIMEOUT.as_secs(),
+            ))
+        },
+    )
+    .await
+}
+
 /// Cached GPS state, updated by the GPS subscription task at ~2.5 Hz.
 #[derive(Debug, Clone, Copy)]
 struct GpsCache {
@@ -441,7 +474,21 @@ async fn imu_subscribe_loop(
     let mut sub = client.subscribe::<SensorInput>().await?;
     tracing::info!("IMU: subscribed to IMU vtable");
 
-    let mut seq: u64 = 0;
+    // First receive with timeout: subscriptions created before the
+    // serial-bridge writes any data can block forever.
+    let first = subscribe_timeout(sub.next(), "IMU").await?;
+
+    let mut seq: u64 = 1;
+    let timestamp = start.elapsed().as_secs_f64();
+    let gyro = gyro_dps_to_rads([first.gyro[0] as f64, first.gyro[1] as f64, first.gyro[2] as f64]);
+    let accel = accel_g_to_ms2([first.accel[0] as f64, first.accel[1] as f64, first.accel[2] as f64]);
+    {
+        let mut c = cache.lock().unwrap();
+        c.gyro = gyro;
+        c.accel = accel;
+        c.timestamp = timestamp;
+        c.seq = seq;
+    }
 
     loop {
         let input = sub.next().await?;
@@ -502,7 +549,10 @@ async fn gps_subscribe_loop(
     let mut sub = client.subscribe::<GPSInput>().await?;
     tracing::info!("GPS: subscribed to GPS vtable");
 
-    let mut gps_tick: u64 = 0;
+    // GPS arrives at 5 Hz -- allow a generous timeout for cold-start lock.
+    subscribe_timeout(sub.next(), "GPS").await?;
+
+    let mut gps_tick: u64 = 1;
     loop {
         let gps = sub.next().await?;
         let has_fix = gps.fix_type >= 3;
@@ -585,7 +635,9 @@ async fn qmc5883l_subscribe_loop(
     let mut sub = client.subscribe::<QMC5883LInput>().await?;
     tracing::info!("QMC5883L: subscribed to QMC5883L vtable");
 
-    let mut mag_tick: u64 = 0;
+    subscribe_timeout(sub.next(), "QMC5883L").await?;
+
+    let mut mag_tick: u64 = 1;
     loop {
         let input = sub.next().await?;
         let mag_gauss = qmc_raw_to_gauss(input.mag);
@@ -633,7 +685,9 @@ async fn mekf_subscribe_loop(
     let mut sub = client.subscribe::<MekfInput>().await?;
     tracing::info!("MEKF: subscribed to aleph.q_hat");
 
-    let mut tick: u64 = 0;
+    subscribe_timeout(sub.next(), "MEKF").await?;
+
+    let mut tick: u64 = 1;
     loop {
         let input = sub.next().await?;
         let euler_ned = mekf_quat_to_euler(input.q_hat);
