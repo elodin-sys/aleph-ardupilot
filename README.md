@@ -2,6 +2,11 @@
 
 ArduCopter on the [Elodin Aleph](https://github.com/elodin-sys/elodin/tree/main/aleph) flight computer with a Rust sensor bridge (Elodin-DB to ArduPilot SITL) and CAN ESC output. See [ARCHITECTURE.md](ARCHITECTURE.md) for design details.
 
+<p align="center">
+  <img src="qgc-aleph.png" alt="QGroundControl on Aleph" />
+  <img src="aleph-ardupilot.gif" alt="Ardupilot on Aleph" />
+</p>
+
 ## Prerequisites
 
 - [Determinate Systems Nix](https://install.determinate.systems/nix)
