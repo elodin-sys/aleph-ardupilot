@@ -1,7 +1,7 @@
 # Aleph ArduPilot
 #
 # NixOS-based flight software stack for the Elodin Aleph flight computer
-# running ArduCopter SITL with a Rust sensor bridge (ardupilot-bridge).
+# running ArduCopter Linux with a Rust sensor bridge (ardupilot-bridge).
 #
 # Two deployment configurations are provided:
 #   - default:   Full onboard stack (local Elodin-DB, sensors, bridge, ArduCopter)
@@ -96,7 +96,7 @@
     # Overlay
     ###########################################################################
     overlays.default = final: prev: {
-      arducopter-sitl = final.callPackage ./nix/pkgs/arducopter.nix {
+      arducopter-aleph = final.callPackage ./nix/pkgs/arducopter.nix {
         src = ardupilot-src;
       };
 
@@ -155,10 +155,9 @@
 
       services.arducopter = {
         enable = true;
-        model = "JSON";
-        homeLocation = "37.7749,-122.4194,10,270";
+        clearEeprom = false;
         defaultsFile = ./src/ardupilot-defaults.param;
-        extraFlags = [ "--serial0" "udpclient:192.168.4.182:14550" ];
+        extraFlags = [ "--serial0" "udp:192.168.4.34:14550" ];
       };
 
       environment.systemPackages = with pkgs; [
@@ -202,7 +201,6 @@
 
       services.ardupilot-bridge = {
         enable = true;
-        hitlPort = 9100;
       };
     };
 
@@ -219,8 +217,7 @@
       # Bridge points at the laptop's Elodin-DB.
       services.ardupilot-bridge = {
         enable = true;
-        elodinAddr = "192.168.4.182:2240";
-        hitlPort = 0;
+        elodinAddr = "192.168.4.34:2240";
       };
     };
 

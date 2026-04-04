@@ -1,0 +1,23 @@
+# Elodin Aleph flight computer (Jetson Orin NX, aarch64)
+# Sensors provided via ExternalAHRS UDP from ardupilot-bridge
+
+env TOOLCHAIN native
+
+define HAL_EXTERNAL_AHRS_DEFAULT 12
+define AP_EXTERNAL_AHRS_ALEPH_ENABLED 1
+define DEFAULT_SERIAL3_PROTOCOL 36
+define HAL_GPS1_TYPE_DEFAULT 21
+define HAL_AHRS_EKF_TYPE_DEFAULT 3
+define HAL_AIRSPEED_TYPE_DEFAULT 0
+define HAL_INS_DEFAULT HAL_INS_NONE
+define AP_INERTIALSENSOR_ALLOW_NO_SENSORS 1
+
+define HAL_BOARD_LOG_DIRECTORY "logs"
+define HAL_BOARD_TERRAIN_DIRECTORY "terrain"
+define HAL_BOARD_STORAGE_DIRECTORY "."
+
+# CAN for DroneCAN ESC output is handled by ardupilot-bridge.
+define HAL_NUM_CAN_IFACES 0
+
+# Reuse VNAV RC paths (no physical PWM I/O, RC via serial protocol).
+define CONFIG_HAL_BOARD_SUBTYPE HAL_BOARD_SUBTYPE_LINUX_VNAV

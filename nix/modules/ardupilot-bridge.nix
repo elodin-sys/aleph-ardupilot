@@ -7,7 +7,7 @@ let
 in
 {
   options.services.ardupilot-bridge = {
-    enable = mkEnableOption "ArduPilot bridge (Elodin-DB sensors to ArduPilot SITL)";
+    enable = mkEnableOption "ArduPilot bridge (Elodin-DB sensors to ArduPilot ExternalAHRS)";
 
     elodinAddr = mkOption {
       type = types.str;
@@ -18,7 +18,7 @@ in
     controlPort = mkOption {
       type = types.int;
       default = 9002;
-      description = "ArduPilot SITL JSON control interface UDP port.";
+      description = "ArduPilot servo output UDP port.";
     };
 
     numMotors = mkOption {
@@ -27,28 +27,16 @@ in
       description = "Number of motor channels.";
     };
 
-    hitlPort = mkOption {
-      type = types.int;
-      default = 0;
-      description = "HITL TCP listen port (0 = disabled).";
-    };
-
     canInterface = mkOption {
       type = types.str;
       default = "";
       description = "SocketCAN interface for DroneCAN ESC output (empty = disabled).";
     };
-
-    homeLocation = mkOption {
-      type = types.str;
-      default = config.services.arducopter.homeLocation;
-      description = "Home location (lat,lon,alt,heading). Defaults to arducopter's homeLocation.";
-    };
   };
 
   config = mkIf cfg.enable {
     systemd.services.ardupilot-bridge = {
-      description = "ArduPilot Bridge - Elodin-DB to ArduPilot SITL";
+      description = "ArduPilot Bridge - Elodin-DB to ArduPilot ExternalAHRS";
       after = [ "network.target" "elodin-db-default.service" "arducopter.service" ];
       wantedBy = [ "multi-user.target" ];
       stopIfChanged = false;
@@ -58,9 +46,8 @@ in
         ELODIN_DB_ADDR = cfg.elodinAddr;
         AP_CONTROL_PORT = toString cfg.controlPort;
         NUM_MOTORS = toString cfg.numMotors;
-        HITL_PORT = toString cfg.hitlPort;
         CAN_INTERFACE = cfg.canInterface;
-        AP_HOME = cfg.homeLocation;
+        AP_HOST = "127.0.0.1";
         RUST_LOG = "info";
       };
 
