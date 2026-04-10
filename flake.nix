@@ -150,14 +150,14 @@
       '';
 
       # Uncomment ONE line to enable GPS-disciplined timestamping:
-      services.sensor-fw.gps.model = "m10q";   # SAM-M10Q (9600 baud)
-      # services.sensor-fw.gps.model = "m9n";    # NEO-M9N / M9N-5883 (38400 baud)
+      # services.sensor-fw.gps.model = "m10q";   # SAM-M10Q (9600 baud)
+      services.sensor-fw.gps.model = "m9n";    # NEO-M9N / M9N-5883 (38400 baud)
 
       services.arducopter = {
         enable = true;
         clearEeprom = false;
         defaultsFile = ./src/ardupilot-defaults.param;
-        extraFlags = [ "--serial0" "udp:192.168.4.34:14550" ];
+        extraFlags = [ "--serial0" "udp:192.168.4.69:14550" ];
       };
 
       environment.systemPackages = with pkgs; [
@@ -217,7 +217,7 @@
       # Bridge points at the laptop's Elodin-DB.
       services.ardupilot-bridge = {
         enable = true;
-        elodinAddr = "192.168.4.34:2240";
+        elodinAddr = "192.168.4.69:2240";
       };
     };
 
