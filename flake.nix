@@ -156,7 +156,7 @@
         enable = true;
         clearEeprom = false;
         defaultsFile = ./src/ardupilot-defaults.param;
-        extraFlags = [ "--serial0" "udp:192.168.4.69:14550" ];
+        extraFlags = [ "--serial0" "udp:192.168.4.64:14550" ];
       };
 
       environment.systemPackages = with pkgs; [
@@ -216,7 +216,7 @@
       # Bridge points at the laptop's Elodin-DB.
       services.ardupilot-bridge = {
         enable = true;
-        elodinAddr = "192.168.4.69:2240";
+        elodinAddr = "192.168.4.64:2240";
       };
     };
 

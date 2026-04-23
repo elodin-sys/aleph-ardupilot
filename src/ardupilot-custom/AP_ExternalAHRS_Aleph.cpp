@@ -53,17 +53,9 @@ bool AP_ExternalAHRS_Aleph::setup_sockets()
 
 void AP_ExternalAHRS_Aleph::update_thread()
 {
-    // Match other ExternalAHRS backends: don't process external sensor data
-    // until scheduler/system init has completed.
-    hal.scheduler->delay(1000);
-    while (!hal.scheduler->is_system_initialized()) {
-        hal.scheduler->delay(100);
-    }
-    hal.scheduler->delay(1000);
-
     while (true) {
         if (!setup_sockets()) {
-            hal.scheduler->delay(1000);
+            hal.scheduler->delay(100);
             continue;
         }
 
@@ -238,6 +230,10 @@ void AP_ExternalAHRS_Aleph::process_baro(const BaroPacket &pkt)
 
 void AP_ExternalAHRS_Aleph::send_servo_frame()
 {
+    if (!hal.scheduler->is_system_initialized()) {
+        return;
+    }
+
     uint32_t dst_addr = 0;
     {
         WITH_SEMAPHORE(sem);
@@ -262,8 +258,12 @@ void AP_ExternalAHRS_Aleph::send_servo_frame()
 void AP_ExternalAHRS_Aleph::update()
 {
     if (!setup_complete) {
+        IGNORE_RETURN(setup_sockets());
+    }
+    if (!sockets_ready) {
         return;
     }
+
     IGNORE_RETURN(check_udp());
     send_servo_frame();
 }
