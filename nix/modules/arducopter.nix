@@ -7,20 +7,7 @@ let
 in
 {
   options.services.arducopter = {
-    enable = mkEnableOption "ArduCopter SITL flight controller";
-
-    homeLocation = mkOption {
-      type = types.str;
-      default = "37.7749,-122.4194,10,270";
-      description = "Home location as lat,lon,alt,heading.";
-      example = "47.3977,8.5456,500,90";
-    };
-
-    model = mkOption {
-      type = types.str;
-      default = "JSON";
-      description = "Simulation model backend (JSON for external sensor bridge).";
-    };
+    enable = mkEnableOption "ArduCopter Linux flight controller";
 
     extraFlags = mkOption {
       type = types.listOf types.str;
@@ -32,13 +19,19 @@ in
     workingDirectory = mkOption {
       type = types.str;
       default = "/var/lib/arducopter";
-      description = "Working directory for ArduPilot (stores eeprom.bin, logs, terrain).";
+      description = "Working directory for ArduPilot (stores ArduCopter.stg, logs, terrain).";
     };
 
     defaultsFile = mkOption {
       type = types.nullOr types.path;
       default = null;
       description = "ArduPilot parameter defaults file (passed via --defaults).";
+    };
+
+    clearEeprom = mkOption {
+      type = types.bool;
+      default = true;
+      description = "Delete ArduCopter.stg on every start (true = clean param slate, false = persist calibration data).";
     };
   };
 
@@ -48,19 +41,16 @@ in
     ];
 
     systemd.services.arducopter = {
-      description = "ArduCopter SITL Flight Controller";
+      description = "ArduCopter Linux Flight Controller";
       after = [ "network.target" ];
       wantedBy = [ "multi-user.target" ];
       stopIfChanged = false;
       restartIfChanged = false;
 
       serviceConfig = {
-        ExecStartPre = "${pkgs.coreutils}/bin/rm -f ${cfg.workingDirectory}/eeprom.bin";
+        ExecStartPre = lib.mkIf cfg.clearEeprom "${pkgs.coreutils}/bin/rm -f ${cfg.workingDirectory}/ArduCopter.stg";
         ExecStart = concatStringsSep " " ([
-          "${pkgs.arducopter-sitl}/bin/arducopter"
-          "--model" cfg.model
-          "--home" cfg.homeLocation
-          "--serial0" "mcast:"
+          "${pkgs.arducopter-aleph}/bin/arducopter"
         ] ++ (lib.optionals (cfg.defaultsFile != null) [
           "--defaults" "${cfg.defaultsFile}"
         ]) ++ cfg.extraFlags);

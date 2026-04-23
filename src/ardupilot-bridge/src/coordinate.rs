@@ -169,6 +169,43 @@ pub fn ubx_heading_to_rad(heading_e5: i32) -> f64 {
 }
 
 // ---------------------------------------------------------------------------
+// MEKF-synthesized compass (Earth field rotated from NED to body)
+// ---------------------------------------------------------------------------
+
+/// Synthesize body-frame magnetic field (milliGauss) from MEKF attitude.
+///
+/// Rotates the expected Earth field from NED to body frame using the
+/// standard aerospace ZYX rotation (yaw, pitch, roll). This produces
+/// compass readings that match ArduPilot's World Magnetic Model
+/// expectations, giving EKF3 a clean heading source from the MEKF.
+pub fn synthesize_mag_field_mgauss(
+    roll: f64,
+    pitch: f64,
+    yaw: f64,
+    earth_b_horiz_mg: f64,
+    earth_declination_rad: f64,
+    earth_b_down_mg: f64,
+) -> [f32; 3] {
+    let bn = earth_b_horiz_mg * earth_declination_rad.cos();
+    let be = earth_b_horiz_mg * earth_declination_rad.sin();
+    let bd = earth_b_down_mg;
+
+    let sr = roll.sin();
+    let cr = roll.cos();
+    let sp = pitch.sin();
+    let cp = pitch.cos();
+    let sy = yaw.sin();
+    let cy = yaw.cos();
+
+    // NED-to-body rotation matrix R = Rx(roll) * Ry(pitch) * Rz(yaw)
+    let bx = bn * (cp * cy) + be * (cp * sy) + bd * (-sp);
+    let by = bn * (sr * sp * cy - cr * sy) + be * (sr * sp * sy + cr * cy) + bd * (sr * cp);
+    let bz = bn * (cr * sp * cy + sr * sy) + be * (cr * sp * sy - sr * cy) + bd * (cr * cp);
+
+    [bx as f32, by as f32, bz as f32]
+}
+
+// ---------------------------------------------------------------------------
 // Heading fusion
 // ---------------------------------------------------------------------------
 

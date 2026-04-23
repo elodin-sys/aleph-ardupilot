@@ -1,52 +1,118 @@
-/// ArduPilot SITL JSON interface.
+/// ArduPilot bridge binary interface.
 ///
 /// Protocol:
-///   - Bridge -> ArduPilot: JSON sensor data over UDP (default port 9003)
-///   - ArduPilot -> Bridge: Binary servo/motor output over UDP (default port 9002)
+///   - Bridge -> ArduPilot: binary sensor packets over UDP
+///   - ArduPilot -> Bridge: binary servo/motor output over UDP
 ///
-/// JSON format (from ArduPilot SIM_JSON docs):
-/// {
-///   "timestamp": <seconds>,
-///   "imu": { "gyro": [gx, gy, gz], "accel_body": [ax, ay, az] },
-///   "position": [north, east, down],
-///   "velocity": [vn, ve, vd],
-///   "attitude": [roll, pitch, yaw]
-/// }
-///
-/// Servo output binary format:
+/// Servo output format:
 ///   u16 magic (18458)
 ///   u16 frame_rate
 ///   u32 frame_count
 ///   u16[16] pwm_values (microseconds, 1000-2000)
 use byteorder::{LittleEndian, ReadBytesExt};
-use serde::Serialize;
 use std::io::Cursor;
 
 pub const ARDUPILOT_SERVO_MAGIC: u16 = 18458;
 pub const DEFAULT_SENSOR_PORT: u16 = 9003;
 pub const DEFAULT_SERVO_PORT: u16 = 9002;
 pub const NUM_SERVO_CHANNELS: usize = 16;
+pub const ALEPH_SENSOR_MAGIC: u16 = 0xAE01;
+pub const ALEPH_PKT_IMU: u8 = 0x01;
+pub const ALEPH_PKT_GPS: u8 = 0x02;
+pub const ALEPH_PKT_MAG: u8 = 0x03;
+pub const ALEPH_PKT_BARO: u8 = 0x04;
 
-#[derive(Debug, Serialize)]
-pub struct ImuData {
-    pub gyro: [f64; 3],
-    pub accel_body: [f64; 3],
+#[derive(Debug, Clone, Copy)]
+pub struct AlephImuPacket {
+    pub gyro: [f32; 3],
+    pub accel_body: [f32; 3],
 }
 
-#[derive(Debug, Serialize)]
-pub struct SitlJsonPacket {
-    pub timestamp: f64,
-    pub imu: ImuData,
-    pub position: [f64; 3],
-    pub velocity: [f64; 3],
-    pub attitude: [f64; 3],
+impl AlephImuPacket {
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let mut out = Vec::with_capacity(2 + 1 + 6 * 4);
+        out.extend_from_slice(&ALEPH_SENSOR_MAGIC.to_le_bytes());
+        out.push(ALEPH_PKT_IMU);
+        for v in self.gyro {
+            out.extend_from_slice(&v.to_le_bytes());
+        }
+        for v in self.accel_body {
+            out.extend_from_slice(&v.to_le_bytes());
+        }
+        out
+    }
 }
 
-impl SitlJsonPacket {
-    pub fn to_json_bytes(&self) -> Vec<u8> {
-        let mut buf = serde_json::to_vec(self).expect("JSON serialization cannot fail");
-        buf.push(b'\n');
-        buf
+#[derive(Debug, Clone, Copy)]
+pub struct AlephGpsPacket {
+    pub lat: i32,
+    pub lon: i32,
+    pub alt_msl: i32,
+    pub vel_ned: [i32; 3],
+    pub h_acc: u32,
+    pub v_acc: u32,
+    pub s_acc: u32,
+    pub ground_speed: u32,
+    pub fix_type: u8,
+    pub satellites: u8,
+    pub itow: u32,
+    pub unix_epoch_ms: i64,
+}
+
+impl AlephGpsPacket {
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let mut out = Vec::with_capacity(2 + 1 + 4 * 10 + 2 + 4 + 8);
+        out.extend_from_slice(&ALEPH_SENSOR_MAGIC.to_le_bytes());
+        out.push(ALEPH_PKT_GPS);
+        out.extend_from_slice(&self.lat.to_le_bytes());
+        out.extend_from_slice(&self.lon.to_le_bytes());
+        out.extend_from_slice(&self.alt_msl.to_le_bytes());
+        for v in self.vel_ned {
+            out.extend_from_slice(&v.to_le_bytes());
+        }
+        out.extend_from_slice(&self.h_acc.to_le_bytes());
+        out.extend_from_slice(&self.v_acc.to_le_bytes());
+        out.extend_from_slice(&self.s_acc.to_le_bytes());
+        out.extend_from_slice(&self.ground_speed.to_le_bytes());
+        out.push(self.fix_type);
+        out.push(self.satellites);
+        out.extend_from_slice(&self.itow.to_le_bytes());
+        out.extend_from_slice(&self.unix_epoch_ms.to_le_bytes());
+        out
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct AlephMagPacket {
+    pub mag_mgauss: [f32; 3],
+}
+
+impl AlephMagPacket {
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let mut out = Vec::with_capacity(2 + 1 + 3 * 4);
+        out.extend_from_slice(&ALEPH_SENSOR_MAGIC.to_le_bytes());
+        out.push(ALEPH_PKT_MAG);
+        for v in self.mag_mgauss {
+            out.extend_from_slice(&v.to_le_bytes());
+        }
+        out
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct AlephBaroPacket {
+    pub pressure_pa: f32,
+    pub temperature_c: f32,
+}
+
+impl AlephBaroPacket {
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let mut out = Vec::with_capacity(2 + 1 + 2 * 4);
+        out.extend_from_slice(&ALEPH_SENSOR_MAGIC.to_le_bytes());
+        out.push(ALEPH_PKT_BARO);
+        out.extend_from_slice(&self.pressure_pa.to_le_bytes());
+        out.extend_from_slice(&self.temperature_c.to_le_bytes());
+        out
     }
 }
 

@@ -3,23 +3,23 @@ mod can_output;
 mod config;
 mod coordinate;
 mod elodin;
-mod hitl;
 
-use crate::ardupilot_ipc::{ServoOutput, SitlJsonPacket, ImuData};
-use crate::can_output::CanOutput;
-use crate::config::{Config, HomeLocation};
-use crate::coordinate::{
-    accel_g_to_ms2, gyro_dps_to_rads,
-    ubx_lla_to_ned, ubx_vel_to_ms, ubx_heading_to_rad,
-    qmc_raw_to_gauss, mekf_quat_to_euler, blend_angle,
+use crate::ardupilot_ipc::{
+    AlephBaroPacket, AlephGpsPacket, AlephImuPacket, AlephMagPacket, ServoOutput,
+    DEFAULT_SENSOR_PORT,
 };
-use crate::elodin::{GPSInput, QMC5883LInput, MekfInput, MotorTelemetry, SensorInput};
+use crate::can_output::CanOutput;
+use crate::config::Config;
+use crate::coordinate::{
+    accel_g_to_ms2, gyro_dps_to_rads, mekf_quat_to_euler, synthesize_mag_field_mgauss,
+};
+use crate::elodin::{AlephBaroInput, GPSInput, MekfInput, MotorTelemetry, SensorInput};
 
 use anyhow::Context;
 use clap::Parser;
 use impeller2::types::{PacketId, Timestamp};
 use impeller2_stellar::{Client, SinkExt, StreamExt};
-use std::net::{SocketAddr, UdpSocket};
+use std::net::{IpAddr, SocketAddr, UdpSocket};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -30,12 +30,6 @@ fn main() -> anyhow::Result<()> {
 
 const SUBSCRIBE_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// Race a subscription's first `.next()` against a timeout.
-///
-/// Elodin-DB subscriptions created before a vtable has any data (e.g. before
-/// the serial-bridge acquires a GPS clock lock and starts writing) can block
-/// forever.  This helper ensures we bail out and let the outer retry loop
-/// reconnect once data is actually available.
 async fn subscribe_timeout<T, E>(
     next: impl std::future::Future<Output = Result<T, E>>,
     label: &str,
@@ -61,47 +55,31 @@ where
     .await
 }
 
-/// Cached GPS state, updated by the GPS subscription task at ~2.5 Hz.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 struct GpsCache {
-    position_ned: [f64; 3],
-    velocity_ned: [f64; 3],
-    yaw_rad: f64,
-    has_fix: bool,
+    lat: i32,
+    lon: i32,
+    alt_msl: i32,
+    vel_ned: [i32; 3],
+    h_acc: u32,
+    v_acc: u32,
+    s_acc: u32,
+    ground_speed: u32,
+    fix_type: u8,
     satellites: u8,
-    h_acc_m: f64,
-    ground_speed_ms: f64,
+    itow: u32,
     unix_epoch_ms: i64,
     epoch_us: i64,
     local_us: i64,
+    seq: u64,
 }
 
-impl Default for GpsCache {
-    fn default() -> Self {
-        Self {
-            position_ned: [0.0; 3],
-            velocity_ned: [0.0; 3],
-            yaw_rad: 0.0,
-            has_fix: false,
-            satellites: 0,
-            h_acc_m: 999.0,
-            ground_speed_ms: 0.0,
-            unix_epoch_ms: 0,
-            epoch_us: 0,
-            local_us: 0,
-        }
-    }
-}
-
-/// Cached IMU sample from the STM32 pre-integrated stream (~750 Hz).
-/// Written by the IMU background thread, read by the main loop for
-/// JSON packet construction.
 #[derive(Debug, Clone, Copy)]
 struct ImuCache {
-    gyro: [f64; 3],      // FRD rad/s
-    accel: [f64; 3],     // FRD m/s^2
-    timestamp: f64,       // seconds since bridge start
-    seq: u64,             // monotonic sample count
+    gyro: [f32; 3],
+    accel: [f32; 3],
+    timestamp: f64,
+    seq: u64,
 }
 
 impl Default for ImuCache {
@@ -115,13 +93,12 @@ impl Default for ImuCache {
     }
 }
 
-/// Cached MEKF attitude, updated from aleph.q_hat at high rate.
 #[derive(Debug, Clone, Copy)]
 struct AttitudeCache {
     roll: f64,
     pitch: f64,
     yaw: f64,
-    valid: bool,
+    seq: u64,
 }
 
 impl Default for AttitudeCache {
@@ -130,25 +107,24 @@ impl Default for AttitudeCache {
             roll: 0.0,
             pitch: 0.0,
             yaw: 0.0,
-            valid: false,
+            seq: 0,
         }
     }
 }
 
-/// Cached QMC5883L magnetometer reading, updated by the mag subscription
-/// task at ~100-200 Hz. Used with the IMU accelerometer to compute a
-/// tilt-compensated compass attitude for ArduPilot SITL.
 #[derive(Debug, Clone, Copy)]
-struct MagCache {
-    mag_frd: [f64; 3],   // body-frame FRD magnetic field in Gauss
-    valid: bool,
+struct BaroCache {
+    pressure_pa: f32,
+    temperature_c: f32,
+    seq: u64,
 }
 
-impl Default for MagCache {
+impl Default for BaroCache {
     fn default() -> Self {
         Self {
-            mag_frd: [0.0; 3],
-            valid: false,
+            pressure_pa: 0.0,
+            temperature_c: 0.0,
+            seq: 0,
         }
     }
 }
@@ -157,22 +133,22 @@ async fn run() -> anyhow::Result<()> {
     let config = Config::parse();
     tracing::info!("ardupilot-bridge starting with config: {:?}", config);
 
-    let home = HomeLocation::parse(&config.home)
-        .context("parse --home / AP_HOME")?;
-    tracing::info!(
-        "home location: lat={:.6} lon={:.6} alt={:.1}m",
-        home.lat_deg, home.lon_deg, home.alt_m,
-    );
+    let ap_host_ip: IpAddr = config
+        .ap_host
+        .parse()
+        .context("parse AP host address")?;
+    let ap_sensor_addr = SocketAddr::new(ap_host_ip, DEFAULT_SENSOR_PORT);
+    tracing::info!("ArduPilot sensor target: {}", ap_sensor_addr);
+    let earth_declination_rad = config.earth_declination_deg.to_radians();
 
     let telemetry_id: PacketId = fastrand::u16(..).to_le_bytes();
 
-    // Bind UDP once -- reused across Elodin-DB reconnects.
     let bind_addr: SocketAddr = format!("0.0.0.0:{}", config.servo_port)
         .parse()
         .unwrap();
-    let udp_socket = UdpSocket::bind(bind_addr)
-        .context("bind UDP control port")?;
-    udp_socket.set_nonblocking(true)
+    let udp_socket = UdpSocket::bind(bind_addr).context("bind UDP control port")?;
+    udp_socket
+        .set_nonblocking(true)
         .context("set UDP non-blocking")?;
 
     let mut can = CanOutput::new(&config.can_interface);
@@ -181,46 +157,24 @@ async fn run() -> anyhow::Result<()> {
     tracing::info!(
         "bridge bound to UDP :{}, waiting for ArduPilot servo output, CAN={}",
         config.servo_port,
-        if can.is_enabled() { &config.can_interface } else { "disabled" }
+        if can.is_enabled() {
+            &config.can_interface
+        } else {
+            "disabled"
+        }
     );
 
-    if config.hitl_port > 0 {
-        let hitl_port = config.hitl_port;
-        let hitl_udp = udp_socket.try_clone().context("clone UDP for HITL")?;
-        std::thread::spawn(move || {
-            let mut hitl_ap_addr: Option<SocketAddr> = None;
-            if let Err(e) = hitl::run_hitl_loop(hitl_port, &hitl_udp, &mut hitl_ap_addr) {
-                tracing::error!("HITL server error: {}", e);
-            }
-        });
-    }
-
-    // GPS subscription -- background thread, ~2.5 Hz from STM32 UBX parser.
     let gps_cache = Arc::new(Mutex::new(GpsCache::default()));
     {
         let gps_cache = Arc::clone(&gps_cache);
-        let home = home;
         let elodin_addr_str = config.elodin_addr.clone();
         std::thread::spawn(move || {
-            if let Err(e) = stellarator::run(move || gps_task(elodin_addr_str, home, gps_cache)) {
+            if let Err(e) = stellarator::run(move || gps_task(elodin_addr_str, gps_cache)) {
                 tracing::error!("GPS task fatal: {:?}", e);
             }
         });
     }
 
-    // QMC5883L magnetometer subscription -- background thread, ~100-200 Hz.
-    let mag_cache = Arc::new(Mutex::new(MagCache::default()));
-    {
-        let mag_cache = Arc::clone(&mag_cache);
-        let elodin_addr_str = config.elodin_addr.clone();
-        std::thread::spawn(move || {
-            if let Err(e) = stellarator::run(move || qmc5883l_task(elodin_addr_str, mag_cache)) {
-                tracing::error!("QMC5883L task fatal: {:?}", e);
-            }
-        });
-    }
-
-    // MEKF attitude subscription -- background thread, high-rate aleph.q_hat.
     let attitude_cache = Arc::new(Mutex::new(AttitudeCache::default()));
     {
         let attitude_cache = Arc::clone(&attitude_cache);
@@ -232,7 +186,17 @@ async fn run() -> anyhow::Result<()> {
         });
     }
 
-    // IMU subscription -- background thread, ~1500 Hz from STM32 sensor-fw.
+    let baro_cache = Arc::new(Mutex::new(BaroCache::default()));
+    {
+        let baro_cache = Arc::clone(&baro_cache);
+        let elodin_addr_str = config.elodin_addr.clone();
+        std::thread::spawn(move || {
+            if let Err(e) = stellarator::run(move || baro_task(elodin_addr_str, baro_cache)) {
+                tracing::error!("Baro task fatal: {:?}", e);
+            }
+        });
+    }
+
     let imu_cache = Arc::new(Mutex::new(ImuCache::default()));
     {
         let imu_cache = Arc::clone(&imu_cache);
@@ -244,14 +208,23 @@ async fn run() -> anyhow::Result<()> {
         });
     }
 
-    // Retry loop -- only the Elodin-DB connection is re-established on error.
-    // The UDP socket and background threads survive across retries.
     loop {
         if let Err(err) = bridge_loop(
-            &config, telemetry_id,
-            &udp_socket, &mut can,
-            &gps_cache, &mag_cache, &imu_cache, &attitude_cache,
-        ).await {
+            &config,
+            telemetry_id,
+            &udp_socket,
+            &mut can,
+            &gps_cache,
+            &attitude_cache,
+            &baro_cache,
+            &imu_cache,
+            ap_sensor_addr,
+            config.earth_b_horiz_mg,
+            earth_declination_rad,
+            config.earth_b_down_mg,
+        )
+        .await
+        {
             tracing::error!("bridge error: {:?}", err);
             stellarator::sleep(Duration::from_millis(500)).await;
         }
@@ -264,9 +237,13 @@ async fn bridge_loop(
     udp_socket: &UdpSocket,
     can: &mut CanOutput,
     gps_cache: &Arc<Mutex<GpsCache>>,
-    _mag_cache: &Arc<Mutex<MagCache>>,
-    imu_cache: &Arc<Mutex<ImuCache>>,
     attitude_cache: &Arc<Mutex<AttitudeCache>>,
+    baro_cache: &Arc<Mutex<BaroCache>>,
+    imu_cache: &Arc<Mutex<ImuCache>>,
+    ap_sensor_addr: SocketAddr,
+    earth_b_horiz_mg: f64,
+    earth_declination_rad: f64,
+    earth_b_down_mg: f64,
 ) -> anyhow::Result<()> {
     let elodin_addr: SocketAddr = config
         .elodin_addr
@@ -282,34 +259,47 @@ async fn bridge_loop(
 
     tracing::info!("connected to Elodin-DB, entering main loop");
 
-    let mut ap_addr: Option<SocketAddr> = None;
+    let mut saw_ap_servo = false;
     let mut last_imu_seq: u64 = 0;
+    let mut last_gps_seq_sent: u64 = 0;
+    let mut last_mag_seq_sent: u64 = 0;
+    let mut last_baro_seq_sent: u64 = 0;
+    let mut last_baro_fallback_gps_seq_sent: u64 = 0;
 
     let mut rate_timer = std::time::Instant::now();
-    let mut json_sent: u64 = 0;
+    let mut imu_sent: u64 = 0;
+    let mut gps_sent: u64 = 0;
+    let mut mag_sent: u64 = 0;
+    let mut baro_sent: u64 = 0;
     let mut servo_recv: u64 = 0;
     let mut imu_skipped: u64 = 0;
     let mut loop_iters: u64 = 0;
+    let mut bin_ser_total_us: u64 = 0;
+    let mut bin_ser_count: u64 = 0;
+    let mut roundtrip_total_us: u64 = 0;
+    let mut roundtrip_count: u64 = 0;
+    let mut last_sensor_send_at: Option<std::time::Instant> = None;
 
     loop {
         loop_iters += 1;
+        let mut did_work = false;
 
         let mut servo_buf = [0u8; 256];
         if let Ok((n, src)) = udp_socket.recv_from(&mut servo_buf) {
             if let Some(servo) = ServoOutput::from_bytes(&servo_buf[..n]) {
-                if ap_addr.is_none() {
+                if !saw_ap_servo {
                     tracing::info!("ArduPilot connected from {}", src);
                 }
-                ap_addr = Some(src);
+                saw_ap_servo = true;
                 servo_recv += 1;
+                if let Some(send_at) = last_sensor_send_at.take() {
+                    let rtt_us = send_at.elapsed().as_micros() as u64;
+                    roundtrip_total_us = roundtrip_total_us.saturating_add(rtt_us);
+                    roundtrip_count = roundtrip_count.saturating_add(1);
+                }
 
                 let motors_norm = servo.motors_normalized(config.num_motors);
-                let motor_pwm: [u16; 4] = [
-                    servo.pwm[0],
-                    servo.pwm[1],
-                    servo.pwm[2],
-                    servo.pwm[3],
-                ];
+                let motor_pwm: [u16; 4] = [servo.pwm[0], servo.pwm[1], servo.pwm[2], servo.pwm[3]];
                 let motor_cmd: [f32; 4] = [
                     motors_norm.get(0).copied().unwrap_or(0.0) as f32,
                     motors_norm.get(1).copied().unwrap_or(0.0) as f32,
@@ -337,85 +327,145 @@ async fn bridge_loop(
                 let telemetry = MotorTelemetry::new(motor_pwm, motor_cmd, telemetry_time_us);
                 let table = telemetry.to_table_packet(telemetry_id);
                 client.send(table).await.0?;
+                did_work = true;
             }
         }
-
-        if ap_addr.is_none() {
-            continue;
-        }
-        let target = ap_addr.unwrap();
 
         let imu = {
             let c = imu_cache.lock().unwrap();
             *c
         };
 
-        if imu.seq == 0 || imu.seq == last_imu_seq {
-            stellarator::sleep(Duration::from_micros(500)).await;
-            continue;
+        if imu.seq > 0 && imu.seq != last_imu_seq {
+            let skipped = imu.seq.saturating_sub(last_imu_seq).saturating_sub(1);
+            imu_skipped += skipped;
+            last_imu_seq = imu.seq;
+
+            let packet = AlephImuPacket {
+                gyro: imu.gyro,
+                accel_body: imu.accel,
+            };
+            let send_started_at = std::time::Instant::now();
+            let bytes = packet.to_bytes();
+            udp_socket
+                .send_to(&bytes, ap_sensor_addr)
+                .context("send IMU packet to ArduPilot")?;
+            let ser_us = send_started_at.elapsed().as_micros() as u64;
+            bin_ser_total_us = bin_ser_total_us.saturating_add(ser_us);
+            bin_ser_count = bin_ser_count.saturating_add(1);
+            last_sensor_send_at = Some(send_started_at);
+            imu_sent += 1;
+            did_work = true;
         }
 
-        let skipped = imu.seq.saturating_sub(last_imu_seq).saturating_sub(1);
-        imu_skipped += skipped;
-        last_imu_seq = imu.seq;
-        json_sent += 1;
-
-        let gps = gps_cache.lock().unwrap();
-        let (position, velocity) = if gps.has_fix {
-            (gps.position_ned, gps.velocity_ned)
-        } else {
-            ([0.0; 3], [0.0; 3])
+        let gps = {
+            let c = gps_cache.lock().unwrap();
+            *c
         };
-        let gps_yaw = gps.yaw_rad;
-        let gps_fix = gps.has_fix;
-        let ground_speed_ms = gps.ground_speed_ms;
-        drop(gps);
+        if gps.seq > 0 && gps.seq != last_gps_seq_sent {
+            last_gps_seq_sent = gps.seq;
+            let packet = AlephGpsPacket {
+                lat: gps.lat,
+                lon: gps.lon,
+                alt_msl: gps.alt_msl,
+                vel_ned: gps.vel_ned,
+                h_acc: gps.h_acc,
+                v_acc: gps.v_acc,
+                s_acc: gps.s_acc,
+                ground_speed: gps.ground_speed,
+                fix_type: gps.fix_type,
+                satellites: gps.satellites,
+                itow: gps.itow,
+                unix_epoch_ms: gps.unix_epoch_ms,
+            };
+            let send_started_at = std::time::Instant::now();
+            let bytes = packet.to_bytes();
+            udp_socket
+                .send_to(&bytes, ap_sensor_addr)
+                .context("send GPS packet to ArduPilot")?;
+            let ser_us = send_started_at.elapsed().as_micros() as u64;
+            bin_ser_total_us = bin_ser_total_us.saturating_add(ser_us);
+            bin_ser_count = bin_ser_count.saturating_add(1);
+            gps_sent += 1;
+            did_work = true;
+        }
 
-        let mekf = {
+        let att = {
             let c = attitude_cache.lock().unwrap();
             *c
         };
+        if att.seq > 0 && att.seq != last_mag_seq_sent {
+            last_mag_seq_sent = att.seq;
+            let synth = synthesize_mag_field_mgauss(
+                att.roll,
+                att.pitch,
+                att.yaw,
+                earth_b_horiz_mg,
+                earth_declination_rad,
+                earth_b_down_mg,
+            );
+            let packet = AlephMagPacket {
+                mag_mgauss: synth,
+            };
+            let send_started_at = std::time::Instant::now();
+            let bytes = packet.to_bytes();
+            udp_socket
+                .send_to(&bytes, ap_sensor_addr)
+                .context("send synthesized compass packet to ArduPilot")?;
+            let ser_us = send_started_at.elapsed().as_micros() as u64;
+            bin_ser_total_us = bin_ser_total_us.saturating_add(ser_us);
+            bin_ser_count = bin_ser_count.saturating_add(1);
+            last_sensor_send_at = Some(send_started_at);
+            mag_sent += 1;
+            did_work = true;
+        }
 
-        // Accel is specific force in FRD m/s²: level reads [0, 0, -g].
-        // Negate to get gravity direction (positive Z = down).
-        let gx = -imu.accel[0];
-        let gy = -imu.accel[1];
-        let gz = -imu.accel[2];
-        let roll = gy.atan2(gz);
-        let pitch = (-gx).atan2(gy * roll.sin() + gz * roll.cos());
-        let yaw = if mekf.valid {
-            if !gps_fix {
-                mekf.yaw
-            } else if ground_speed_ms > 3.0 {
-                gps_yaw
-            } else if ground_speed_ms > 1.0 {
-                let alpha = (ground_speed_ms - 1.0) / 2.0;
-                blend_angle(mekf.yaw, gps_yaw, alpha)
-            } else {
-                mekf.yaw
-            }
-        } else if gps_fix {
-            gps_yaw
-        } else {
-            0.0
+        let baro = {
+            let c = baro_cache.lock().unwrap();
+            *c
         };
-        let attitude = [roll, pitch, yaw];
-
-        let packet = SitlJsonPacket {
-            timestamp: imu.timestamp,
-            imu: ImuData {
-                gyro: imu.gyro,
-                accel_body: imu.accel,
-            },
-            position,
-            velocity,
-            attitude,
-        };
-
-        let json_bytes = packet.to_json_bytes();
-        udp_socket
-            .send_to(&json_bytes, target)
-            .context("send sensor JSON to ArduPilot")?;
+        if baro.seq > 0 && baro.seq != last_baro_seq_sent {
+            last_baro_seq_sent = baro.seq;
+            let packet = AlephBaroPacket {
+                pressure_pa: baro.pressure_pa,
+                temperature_c: baro.temperature_c,
+            };
+            let send_started_at = std::time::Instant::now();
+            let bytes = packet.to_bytes();
+            udp_socket
+                .send_to(&bytes, ap_sensor_addr)
+                .context("send barometer packet to ArduPilot")?;
+            let ser_us = send_started_at.elapsed().as_micros() as u64;
+            bin_ser_total_us = bin_ser_total_us.saturating_add(ser_us);
+            bin_ser_count = bin_ser_count.saturating_add(1);
+            last_sensor_send_at = Some(send_started_at);
+            baro_sent += 1;
+            did_work = true;
+        } else if baro.seq == 0
+            && gps.seq > 0
+            && gps.seq == last_gps_seq_sent
+            && gps.seq != last_baro_fallback_gps_seq_sent
+        {
+            // Fallback only while aleph baro stream has not started.
+            let alt_m = gps.alt_msl as f64 * 1e-3;
+            let pressure = (101325.0 * (1.0 - 2.2558e-5 * alt_m).powf(5.2559)) as f32;
+            let packet = AlephBaroPacket {
+                pressure_pa: pressure,
+                temperature_c: 39.8,
+            };
+            let send_started_at = std::time::Instant::now();
+            let bytes = packet.to_bytes();
+            udp_socket
+                .send_to(&bytes, ap_sensor_addr)
+                .context("send fallback barometer packet to ArduPilot")?;
+            let ser_us = send_started_at.elapsed().as_micros() as u64;
+            bin_ser_total_us = bin_ser_total_us.saturating_add(ser_us);
+            bin_ser_count = bin_ser_count.saturating_add(1);
+            last_sensor_send_at = Some(send_started_at);
+            last_baro_fallback_gps_seq_sent = gps.seq;
+            baro_sent += 1;
+            did_work = true;
+        }
 
         let elapsed = rate_timer.elapsed();
         if elapsed >= Duration::from_secs(1) {
@@ -424,34 +474,49 @@ async fn bridge_loop(
                 let c = imu_cache.lock().unwrap();
                 c.seq as f64 / c.timestamp.max(0.001)
             };
+            let bin_total = imu_sent + gps_sent + mag_sent + baro_sent;
             tracing::info!(
-                "RATES: imu_from_db={:.0}Hz json_to_ap={:.0}Hz servo_from_ap={:.0}Hz imu_skipped={} loop={:.0}/s",
+                "RATES: imu_from_db={:.0}Hz bin_to_ap={:.0}Hz imu_to_ap={:.0}Hz gps_to_ap={:.0}Hz mag_to_ap={:.0}Hz baro_to_ap={:.0}Hz servo_from_ap={:.0}Hz imu_skipped={} loop={:.0}/s",
                 imu_db_hz,
-                json_sent as f64 / secs,
+                bin_total as f64 / secs,
+                imu_sent as f64 / secs,
+                gps_sent as f64 / secs,
+                mag_sent as f64 / secs,
+                baro_sent as f64 / secs,
                 servo_recv as f64 / secs,
                 imu_skipped,
                 loop_iters as f64 / secs,
             );
+            let bin_ser_avg_us = bin_ser_total_us as f64 / bin_ser_count.max(1) as f64;
+            let roundtrip_avg_us = roundtrip_total_us as f64 / roundtrip_count.max(1) as f64;
+            tracing::info!(
+                "PERF: bin_ser_avg={:.0}us roundtrip_avg={:.0}us roundtrip_count={}",
+                bin_ser_avg_us,
+                roundtrip_avg_us,
+                roundtrip_count
+            );
+
             rate_timer = std::time::Instant::now();
-            json_sent = 0;
+            imu_sent = 0;
+            gps_sent = 0;
+            mag_sent = 0;
+            baro_sent = 0;
             servo_recv = 0;
             imu_skipped = 0;
             loop_iters = 0;
+            bin_ser_total_us = 0;
+            bin_ser_count = 0;
+            roundtrip_total_us = 0;
+            roundtrip_count = 0;
+        }
+
+        if !did_work {
+            stellarator::sleep(Duration::from_micros(500)).await;
         }
     }
 }
 
-// ---------------------------------------------------------------------------
-// Background tasks: IMU, GPS, and QMC5883L subscriptions
-// ---------------------------------------------------------------------------
-
-/// IMU subscription task. Runs in a dedicated thread with its own stellarator
-/// runtime and Elodin-DB connection. Converts sensor-fw units (g, dps, FRD)
-/// to ArduPilot units (m/s², rad/s, FRD) and caches the latest sample.
-async fn imu_task(
-    elodin_addr: String,
-    cache: Arc<Mutex<ImuCache>>,
-) -> anyhow::Result<()> {
+async fn imu_task(elodin_addr: String, cache: Arc<Mutex<ImuCache>>) -> anyhow::Result<()> {
     let start = std::time::Instant::now();
     loop {
         match imu_subscribe_loop(&elodin_addr, &cache, &start).await {
@@ -474,18 +539,15 @@ async fn imu_subscribe_loop(
     let mut sub = client.subscribe::<SensorInput>().await?;
     tracing::info!("IMU: subscribed to IMU vtable");
 
-    // First receive with timeout: subscriptions created before the
-    // serial-bridge writes any data can block forever.
     let first = subscribe_timeout(sub.next(), "IMU").await?;
-
     let mut seq: u64 = 1;
     let timestamp = start.elapsed().as_secs_f64();
     let gyro = gyro_dps_to_rads([first.gyro[0] as f64, first.gyro[1] as f64, first.gyro[2] as f64]);
     let accel = accel_g_to_ms2([first.accel[0] as f64, first.accel[1] as f64, first.accel[2] as f64]);
     {
         let mut c = cache.lock().unwrap();
-        c.gyro = gyro;
-        c.accel = accel;
+        c.gyro = [gyro[0] as f32, gyro[1] as f32, gyro[2] as f32];
+        c.accel = [accel[0] as f32, accel[1] as f32, accel[2] as f32];
         c.timestamp = timestamp;
         c.seq = seq;
     }
@@ -494,7 +556,6 @@ async fn imu_subscribe_loop(
         let input = sub.next().await?;
         seq += 1;
         let timestamp = start.elapsed().as_secs_f64();
-
         let gyro = gyro_dps_to_rads([
             input.gyro[0] as f64,
             input.gyro[1] as f64,
@@ -508,8 +569,8 @@ async fn imu_subscribe_loop(
 
         {
             let mut c = cache.lock().unwrap();
-            c.gyro = gyro;
-            c.accel = accel;
+            c.gyro = [gyro[0] as f32, gyro[1] as f32, gyro[2] as f32];
+            c.accel = [accel[0] as f32, accel[1] as f32, accel[2] as f32];
             c.timestamp = timestamp;
             c.seq = seq;
         }
@@ -521,15 +582,9 @@ async fn imu_subscribe_loop(
     }
 }
 
-/// GPS subscription task. Reconnects on error.
-/// TODO: simulation -- synthetic GPS rows from sim for HITL testing.
-async fn gps_task(
-    elodin_addr: String,
-    home: HomeLocation,
-    cache: Arc<Mutex<GpsCache>>,
-) -> anyhow::Result<()> {
+async fn gps_task(elodin_addr: String, cache: Arc<Mutex<GpsCache>>) -> anyhow::Result<()> {
     loop {
-        match gps_subscribe_loop(&elodin_addr, &home, &cache).await {
+        match gps_subscribe_loop(&elodin_addr, &cache).await {
             Ok(()) => {}
             Err(e) => {
                 tracing::warn!("GPS subscription error (will retry): {}", e);
@@ -539,132 +594,96 @@ async fn gps_task(
     }
 }
 
-async fn gps_subscribe_loop(
-    elodin_addr: &str,
-    home: &HomeLocation,
-    cache: &Arc<Mutex<GpsCache>>,
-) -> anyhow::Result<()> {
+async fn gps_subscribe_loop(elodin_addr: &str, cache: &Arc<Mutex<GpsCache>>) -> anyhow::Result<()> {
     let addr: SocketAddr = elodin_addr.parse().context("parse elodin addr for GPS")?;
     let mut client = Client::connect(addr).await.map_err(anyhow::Error::from)?;
     let mut sub = client.subscribe::<GPSInput>().await?;
     tracing::info!("GPS: subscribed to GPS vtable");
 
-    // GPS arrives at 5 Hz -- allow a generous timeout for cold-start lock.
-    subscribe_timeout(sub.next(), "GPS").await?;
+    let gps = subscribe_timeout(sub.next(), "GPS").await?;
 
+    let mut seq: u64 = 1;
     let mut gps_tick: u64 = 1;
+    {
+        let mut c = cache.lock().unwrap();
+        c.lat = gps.lat;
+        c.lon = gps.lon;
+        c.alt_msl = gps.alt_msl;
+        c.vel_ned = gps.vel_ned;
+        c.h_acc = gps.h_acc;
+        c.v_acc = gps.v_acc;
+        c.s_acc = gps.s_acc;
+        c.ground_speed = gps.ground_speed;
+        c.fix_type = gps.fix_type;
+        c.satellites = gps.satellites;
+        c.itow = gps.itow;
+        c.unix_epoch_ms = gps.unix_epoch_ms;
+        if gps.unix_epoch_ms > 0 {
+            c.epoch_us = gps.unix_epoch_ms.saturating_mul(1000);
+            c.local_us = Timestamp::now().0;
+        }
+        c.seq = seq;
+    }
+    if gps_tick % 10 == 1 {
+        tracing::info!(
+            "GPS: fix={} sats={} lat={:.7} lon={:.7} alt={:.1}m h_acc={:.2}m vel=[{:.2},{:.2},{:.2}]m/s",
+            gps.fix_type,
+            gps.satellites,
+            gps.lat as f64 * 1e-7,
+            gps.lon as f64 * 1e-7,
+            gps.alt_msl as f64 * 1e-3,
+            gps.h_acc as f64 * 1e-3,
+            gps.vel_ned[0] as f64 * 1e-3,
+            gps.vel_ned[1] as f64 * 1e-3,
+            gps.vel_ned[2] as f64 * 1e-3,
+        );
+    }
+    seq += 1;
+    gps_tick += 1;
+
     loop {
         let gps = sub.next().await?;
-        let has_fix = gps.fix_type >= 3;
-
-        let position_ned = if has_fix {
-            ubx_lla_to_ned(
-                gps.lat, gps.lon, gps.alt_msl,
-                home.lat_deg, home.lon_deg, home.alt_m,
-            )
-        } else {
-            [0.0; 3]
-        };
-
-        let velocity_ned = if has_fix {
-            ubx_vel_to_ms(gps.vel_ned)
-        } else {
-            [0.0; 3]
-        };
-
-        let yaw_rad = ubx_heading_to_rad(gps.heading_motion);
-        let h_acc_m = gps.h_acc as f64 * 1e-3;
-        let ground_speed_ms = gps.ground_speed as f64 * 1e-3;
-
         {
             let mut c = cache.lock().unwrap();
-            c.position_ned = position_ned;
-            c.velocity_ned = velocity_ned;
-            c.yaw_rad = yaw_rad;
-            c.has_fix = has_fix;
+            c.lat = gps.lat;
+            c.lon = gps.lon;
+            c.alt_msl = gps.alt_msl;
+            c.vel_ned = gps.vel_ned;
+            c.h_acc = gps.h_acc;
+            c.v_acc = gps.v_acc;
+            c.s_acc = gps.s_acc;
+            c.ground_speed = gps.ground_speed;
+            c.fix_type = gps.fix_type;
             c.satellites = gps.satellites;
-            c.h_acc_m = h_acc_m;
-            c.ground_speed_ms = ground_speed_ms;
+            c.itow = gps.itow;
             c.unix_epoch_ms = gps.unix_epoch_ms;
             if gps.unix_epoch_ms > 0 {
                 c.epoch_us = gps.unix_epoch_ms.saturating_mul(1000);
                 c.local_us = Timestamp::now().0;
             }
+            c.seq = seq;
         }
 
+        seq += 1;
         gps_tick += 1;
         if gps_tick % 10 == 1 {
             tracing::info!(
-                "GPS: fix={} sats={} lat={:.7} lon={:.7} alt={:.1}m h_acc={:.2}m NED=[{:.1},{:.1},{:.1}]",
+                "GPS: fix={} sats={} lat={:.7} lon={:.7} alt={:.1}m h_acc={:.2}m vel=[{:.2},{:.2},{:.2}]m/s",
                 gps.fix_type,
                 gps.satellites,
                 gps.lat as f64 * 1e-7,
                 gps.lon as f64 * 1e-7,
                 gps.alt_msl as f64 * 1e-3,
-                h_acc_m,
-                position_ned[0], position_ned[1], position_ned[2],
+                gps.h_acc as f64 * 1e-3,
+                gps.vel_ned[0] as f64 * 1e-3,
+                gps.vel_ned[1] as f64 * 1e-3,
+                gps.vel_ned[2] as f64 * 1e-3,
             );
         }
     }
 }
 
-/// QMC5883L magnetometer subscription task. Reconnects on error.
-/// Subscribes to QMC5883L.mag (raw i16 LSB) and converts to body-frame
-/// Gauss values for tilt-compensated compass computation.
-async fn qmc5883l_task(
-    elodin_addr: String,
-    cache: Arc<Mutex<MagCache>>,
-) -> anyhow::Result<()> {
-    loop {
-        match qmc5883l_subscribe_loop(&elodin_addr, &cache).await {
-            Ok(()) => {}
-            Err(e) => {
-                tracing::warn!("QMC5883L subscription error (will retry): {}", e);
-                stellarator::sleep(Duration::from_secs(2)).await;
-            }
-        }
-    }
-}
-
-async fn qmc5883l_subscribe_loop(
-    elodin_addr: &str,
-    cache: &Arc<Mutex<MagCache>>,
-) -> anyhow::Result<()> {
-    let addr: SocketAddr = elodin_addr.parse().context("parse elodin addr for QMC5883L")?;
-    let mut client = Client::connect(addr).await.map_err(anyhow::Error::from)?;
-    let mut sub = client.subscribe::<QMC5883LInput>().await?;
-    tracing::info!("QMC5883L: subscribed to QMC5883L vtable");
-
-    subscribe_timeout(sub.next(), "QMC5883L").await?;
-
-    let mut mag_tick: u64 = 1;
-    loop {
-        let input = sub.next().await?;
-        let mag_gauss = qmc_raw_to_gauss(input.mag);
-
-        {
-            let mut c = cache.lock().unwrap();
-            c.mag_frd = mag_gauss;
-            c.valid = true;
-        }
-
-        mag_tick += 1;
-        if mag_tick % 200 == 1 {
-            let magnitude = (mag_gauss[0].powi(2) + mag_gauss[1].powi(2) + mag_gauss[2].powi(2)).sqrt();
-            tracing::info!(
-                "MAG: raw=[{:.4},{:.4},{:.4}] |B|={:.4} G",
-                mag_gauss[0], mag_gauss[1], mag_gauss[2], magnitude,
-            );
-        }
-    }
-}
-
-/// MEKF attitude subscription task. Reconnects on error.
-/// Subscribes to `aleph.q_hat` and extracts NED/FRD Euler angles.
-async fn mekf_task(
-    elodin_addr: String,
-    cache: Arc<Mutex<AttitudeCache>>,
-) -> anyhow::Result<()> {
+async fn mekf_task(elodin_addr: String, cache: Arc<Mutex<AttitudeCache>>) -> anyhow::Result<()> {
     loop {
         match mekf_subscribe_loop(&elodin_addr, &cache).await {
             Ok(()) => {}
@@ -680,34 +699,108 @@ async fn mekf_subscribe_loop(
     elodin_addr: &str,
     cache: &Arc<Mutex<AttitudeCache>>,
 ) -> anyhow::Result<()> {
-    let addr: SocketAddr = elodin_addr.parse().context("parse elodin addr for MEKF")?;
+    let addr: SocketAddr = elodin_addr
+        .parse()
+        .context("parse elodin addr for MEKF")?;
     let mut client = Client::connect(addr).await.map_err(anyhow::Error::from)?;
     let mut sub = client.subscribe::<MekfInput>().await?;
     tracing::info!("MEKF: subscribed to aleph.q_hat");
 
-    subscribe_timeout(sub.next(), "MEKF").await?;
+    let first = subscribe_timeout(sub.next(), "MEKF").await?;
 
+    let mut seq: u64 = 1;
     let mut tick: u64 = 1;
+    let euler = mekf_quat_to_euler(first.q_hat);
+    {
+        let mut c = cache.lock().unwrap();
+        c.roll = euler[0];
+        c.pitch = euler[1];
+        c.yaw = euler[2];
+        c.seq = seq;
+    }
+    if tick % 1000 == 1 {
+        tracing::info!(
+            "MEKF: rpy=[{:.1},{:.1},{:.1}] deg",
+            euler[0].to_degrees(),
+            euler[1].to_degrees(),
+            euler[2].to_degrees(),
+        );
+    }
+    seq += 1;
+    tick += 1;
+
     loop {
         let input = sub.next().await?;
-        let euler_ned = mekf_quat_to_euler(input.q_hat);
+        let euler = mekf_quat_to_euler(input.q_hat);
 
         {
             let mut c = cache.lock().unwrap();
-            c.roll = euler_ned[0];
-            c.pitch = euler_ned[1];
-            c.yaw = euler_ned[2];
-            c.valid = true;
+            c.roll = euler[0];
+            c.pitch = euler[1];
+            c.yaw = euler[2];
+            c.seq = seq;
         }
 
+        seq += 1;
         tick += 1;
         if tick % 1000 == 1 {
             tracing::info!(
                 "MEKF: rpy=[{:.1},{:.1},{:.1}] deg",
-                euler_ned[0].to_degrees(),
-                euler_ned[1].to_degrees(),
-                euler_ned[2].to_degrees(),
+                euler[0].to_degrees(),
+                euler[1].to_degrees(),
+                euler[2].to_degrees(),
             );
         }
     }
 }
+
+async fn baro_task(elodin_addr: String, cache: Arc<Mutex<BaroCache>>) -> anyhow::Result<()> {
+    loop {
+        match baro_subscribe_loop(&elodin_addr, &cache).await {
+            Ok(()) => {}
+            Err(e) => {
+                tracing::warn!("Baro subscription error (will retry): {}", e);
+                stellarator::sleep(Duration::from_secs(2)).await;
+            }
+        }
+    }
+}
+
+async fn baro_subscribe_loop(elodin_addr: &str, cache: &Arc<Mutex<BaroCache>>) -> anyhow::Result<()> {
+    let addr: SocketAddr = elodin_addr.parse().context("parse elodin addr for baro")?;
+    let mut client = Client::connect(addr).await.map_err(anyhow::Error::from)?;
+    let mut sub = client.subscribe::<AlephBaroInput>().await?;
+    tracing::info!("Baro: subscribed to aleph baro vtable (f32)");
+
+    let first = subscribe_timeout(sub.next(), "Baro").await?;
+    let mut seq: u64 = 1;
+    {
+        let mut c = cache.lock().unwrap();
+        c.pressure_pa = first.baro;
+        c.temperature_c = first.baro_temp;
+        c.seq = seq;
+    }
+
+    let mut tick: u64 = 1;
+    loop {
+        let input = sub.next().await?;
+        seq += 1;
+        let pressure_pa = input.baro;
+        let temperature_c = input.baro_temp;
+        {
+            let mut c = cache.lock().unwrap();
+            c.pressure_pa = pressure_pa;
+            c.temperature_c = temperature_c;
+            c.seq = seq;
+        }
+        tick += 1;
+        if tick % 20 == 1 {
+            tracing::info!(
+                "BARO: pressure={:.1}Pa temp={:.2}C",
+                pressure_pa,
+                temperature_c,
+            );
+        }
+    }
+}
+

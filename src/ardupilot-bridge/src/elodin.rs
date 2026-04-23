@@ -64,6 +64,15 @@ pub struct MekfInput {
     pub q_hat: [f64; 4],
 }
 
+/// Barometer output from the aleph estimator pipeline.
+#[derive(AsVTable, Default, Debug, Clone, TryFromBytes, Immutable, KnownLayout)]
+#[db(parent = "aleph")]
+#[repr(C, packed)]
+pub struct AlephBaroInput {
+    pub baro: f32,      // pressure in Pascals
+    pub baro_temp: f32, // temperature in Celsius
+}
+
 /// Motor command telemetry written back to Elodin-DB.
 #[derive(AsVTable, Metadatatize, IntoBytes, Immutable, Debug)]
 #[db(parent = "ardupilot")]
