@@ -85,6 +85,7 @@ private:
 
     static constexpr uint16_t SENSOR_PORT = 9003;
     static constexpr uint16_t SERVO_PORT = 9002;
+    static constexpr uint16_t SERVO_MAGIC = 18458;
     static constexpr uint16_t SERVO_FRAME_RATE_HZ = 400;
 
     void update_thread();

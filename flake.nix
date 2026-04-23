@@ -20,9 +20,8 @@
   };
 
   inputs = {
-    aleph.url = "github:elodin-sys/elodin?rev=1560dfe28351a266840ae8fbfef4138c9a09d70f&dir=aleph";
-    elodin.url = "github:elodin-sys/elodin?rev=1560dfe28351a266840ae8fbfef4138c9a09d70f";
-    flake-utils.follows = "aleph/flake-utils";
+    aleph.url = "github:elodin-sys/elodin?rev=aea84b785479779bae30a5ea6781768f5cc29aab&dir=aleph";
+    elodin.url = "github:elodin-sys/elodin?rev=aea84b785479779bae30a5ea6781768f5cc29aab";
     nixpkgs.follows = "aleph/nixpkgs";
 
     ardupilot-src = {
@@ -118,7 +117,7 @@
         aleph-setup aleph-base aleph-dev
 
         # Flight software
-        sensor-fw
+        stm
         mekf
         elodin-db
         aleph-serial-bridge
@@ -150,8 +149,8 @@
       '';
 
       # Uncomment ONE line to enable GPS-disciplined timestamping:
-      # services.sensor-fw.gps.model = "m10q";   # SAM-M10Q (9600 baud)
-      services.sensor-fw.gps.model = "m9n";    # NEO-M9N / M9N-5883 (38400 baud)
+      services.sensor-fw.gps.model = "m10q";   # SAM-M10Q (9600 baud)
+      # services.sensor-fw.gps.model = "m9n";    # NEO-M9N / M9N-5883 (38400 baud)
 
       services.arducopter = {
         enable = true;

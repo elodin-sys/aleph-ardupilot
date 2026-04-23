@@ -172,23 +172,23 @@ pub fn ubx_heading_to_rad(heading_e5: i32) -> f64 {
 // MEKF-synthesized compass (Earth field rotated from NED to body)
 // ---------------------------------------------------------------------------
 
-/// Earth magnetic field in NED frame for SF Bay Area (~37.55°N, 122.32°W).
-/// Values from WMM2025 for 2026: horizontal ~233 mG, declination ~13° E,
-/// vertical (down) ~425 mG, total ~484 mG.
-const EARTH_B_HORIZ_MG: f64 = 233.0;
-const EARTH_DECLINATION_RAD: f64 = 13.0 * std::f64::consts::PI / 180.0;
-const EARTH_B_DOWN_MG: f64 = 425.0;
-
 /// Synthesize body-frame magnetic field (milliGauss) from MEKF attitude.
 ///
 /// Rotates the expected Earth field from NED to body frame using the
 /// standard aerospace ZYX rotation (yaw, pitch, roll). This produces
 /// compass readings that match ArduPilot's World Magnetic Model
 /// expectations, giving EKF3 a clean heading source from the MEKF.
-pub fn synthesize_mag_field_mgauss(roll: f64, pitch: f64, yaw: f64) -> [f32; 3] {
-    let bn = EARTH_B_HORIZ_MG * EARTH_DECLINATION_RAD.cos();
-    let be = EARTH_B_HORIZ_MG * EARTH_DECLINATION_RAD.sin();
-    let bd = EARTH_B_DOWN_MG;
+pub fn synthesize_mag_field_mgauss(
+    roll: f64,
+    pitch: f64,
+    yaw: f64,
+    earth_b_horiz_mg: f64,
+    earth_declination_rad: f64,
+    earth_b_down_mg: f64,
+) -> [f32; 3] {
+    let bn = earth_b_horiz_mg * earth_declination_rad.cos();
+    let be = earth_b_horiz_mg * earth_declination_rad.sin();
+    let bd = earth_b_down_mg;
 
     let sr = roll.sin();
     let cr = roll.cos();

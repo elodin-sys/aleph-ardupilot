@@ -10,7 +10,9 @@ use crate::ardupilot_ipc::{
 };
 use crate::can_output::CanOutput;
 use crate::config::Config;
-use crate::coordinate::{accel_g_to_ms2, gyro_dps_to_rads, mekf_quat_to_euler, synthesize_mag_field_mgauss};
+use crate::coordinate::{
+    accel_g_to_ms2, gyro_dps_to_rads, mekf_quat_to_euler, synthesize_mag_field_mgauss,
+};
 use crate::elodin::{AlephBaroInput, GPSInput, MekfInput, MotorTelemetry, SensorInput};
 
 use anyhow::Context;
@@ -137,6 +139,7 @@ async fn run() -> anyhow::Result<()> {
         .context("parse AP host address")?;
     let ap_sensor_addr = SocketAddr::new(ap_host_ip, DEFAULT_SENSOR_PORT);
     tracing::info!("ArduPilot sensor target: {}", ap_sensor_addr);
+    let earth_declination_rad = config.earth_declination_deg.to_radians();
 
     let telemetry_id: PacketId = fastrand::u16(..).to_le_bytes();
 
@@ -216,6 +219,9 @@ async fn run() -> anyhow::Result<()> {
             &baro_cache,
             &imu_cache,
             ap_sensor_addr,
+            config.earth_b_horiz_mg,
+            earth_declination_rad,
+            config.earth_b_down_mg,
         )
         .await
         {
@@ -235,6 +241,9 @@ async fn bridge_loop(
     baro_cache: &Arc<Mutex<BaroCache>>,
     imu_cache: &Arc<Mutex<ImuCache>>,
     ap_sensor_addr: SocketAddr,
+    earth_b_horiz_mg: f64,
+    earth_declination_rad: f64,
+    earth_b_down_mg: f64,
 ) -> anyhow::Result<()> {
     let elodin_addr: SocketAddr = config
         .elodin_addr
@@ -387,7 +396,14 @@ async fn bridge_loop(
         };
         if att.seq > 0 && att.seq != last_mag_seq_sent {
             last_mag_seq_sent = att.seq;
-            let synth = synthesize_mag_field_mgauss(att.roll, att.pitch, att.yaw);
+            let synth = synthesize_mag_field_mgauss(
+                att.roll,
+                att.pitch,
+                att.yaw,
+                earth_b_horiz_mg,
+                earth_declination_rad,
+                earth_b_down_mg,
+            );
             let packet = AlephMagPacket {
                 mag_mgauss: synth,
             };
@@ -584,10 +600,47 @@ async fn gps_subscribe_loop(elodin_addr: &str, cache: &Arc<Mutex<GpsCache>>) -> 
     let mut sub = client.subscribe::<GPSInput>().await?;
     tracing::info!("GPS: subscribed to GPS vtable");
 
-    subscribe_timeout(sub.next(), "GPS").await?;
+    let gps = subscribe_timeout(sub.next(), "GPS").await?;
 
     let mut seq: u64 = 1;
     let mut gps_tick: u64 = 1;
+    {
+        let mut c = cache.lock().unwrap();
+        c.lat = gps.lat;
+        c.lon = gps.lon;
+        c.alt_msl = gps.alt_msl;
+        c.vel_ned = gps.vel_ned;
+        c.h_acc = gps.h_acc;
+        c.v_acc = gps.v_acc;
+        c.s_acc = gps.s_acc;
+        c.ground_speed = gps.ground_speed;
+        c.fix_type = gps.fix_type;
+        c.satellites = gps.satellites;
+        c.itow = gps.itow;
+        c.unix_epoch_ms = gps.unix_epoch_ms;
+        if gps.unix_epoch_ms > 0 {
+            c.epoch_us = gps.unix_epoch_ms.saturating_mul(1000);
+            c.local_us = Timestamp::now().0;
+        }
+        c.seq = seq;
+    }
+    if gps_tick % 10 == 1 {
+        tracing::info!(
+            "GPS: fix={} sats={} lat={:.7} lon={:.7} alt={:.1}m h_acc={:.2}m vel=[{:.2},{:.2},{:.2}]m/s",
+            gps.fix_type,
+            gps.satellites,
+            gps.lat as f64 * 1e-7,
+            gps.lon as f64 * 1e-7,
+            gps.alt_msl as f64 * 1e-3,
+            gps.h_acc as f64 * 1e-3,
+            gps.vel_ned[0] as f64 * 1e-3,
+            gps.vel_ned[1] as f64 * 1e-3,
+            gps.vel_ned[2] as f64 * 1e-3,
+        );
+    }
+    seq += 1;
+    gps_tick += 1;
+
     loop {
         let gps = sub.next().await?;
         {
@@ -653,10 +706,29 @@ async fn mekf_subscribe_loop(
     let mut sub = client.subscribe::<MekfInput>().await?;
     tracing::info!("MEKF: subscribed to aleph.q_hat");
 
-    subscribe_timeout(sub.next(), "MEKF").await?;
+    let first = subscribe_timeout(sub.next(), "MEKF").await?;
 
     let mut seq: u64 = 1;
     let mut tick: u64 = 1;
+    let euler = mekf_quat_to_euler(first.q_hat);
+    {
+        let mut c = cache.lock().unwrap();
+        c.roll = euler[0];
+        c.pitch = euler[1];
+        c.yaw = euler[2];
+        c.seq = seq;
+    }
+    if tick % 1000 == 1 {
+        tracing::info!(
+            "MEKF: rpy=[{:.1},{:.1},{:.1}] deg",
+            euler[0].to_degrees(),
+            euler[1].to_degrees(),
+            euler[2].to_degrees(),
+        );
+    }
+    seq += 1;
+    tick += 1;
+
     loop {
         let input = sub.next().await?;
         let euler = mekf_quat_to_euler(input.q_hat);

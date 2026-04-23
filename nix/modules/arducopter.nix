@@ -19,7 +19,7 @@ in
     workingDirectory = mkOption {
       type = types.str;
       default = "/var/lib/arducopter";
-      description = "Working directory for ArduPilot (stores eeprom.bin, logs, terrain).";
+      description = "Working directory for ArduPilot (stores ArduCopter.stg, logs, terrain).";
     };
 
     defaultsFile = mkOption {
@@ -31,7 +31,7 @@ in
     clearEeprom = mkOption {
       type = types.bool;
       default = true;
-      description = "Delete eeprom.bin on every start (true = clean param slate, false = persist calibration data).";
+      description = "Delete ArduCopter.stg on every start (true = clean param slate, false = persist calibration data).";
     };
   };
 

@@ -248,7 +248,7 @@ void AP_ExternalAHRS_Aleph::send_servo_frame()
     }
 
     ServoPacket pkt {};
-    pkt.magic = 18458;
+    pkt.magic = SERVO_MAGIC;
     pkt.frame_rate = SERVO_FRAME_RATE_HZ;
     pkt.frame_count = frame_count++;
     for (uint8_t i = 0; i < 16; i++) {

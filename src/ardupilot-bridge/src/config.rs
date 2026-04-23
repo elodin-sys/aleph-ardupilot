@@ -23,4 +23,16 @@ pub struct Config {
     /// SocketCAN interface for DroneCAN ESC output (empty = disabled)
     #[arg(long, default_value = "", env = "CAN_INTERFACE")]
     pub can_interface: String,
+
+    /// Horizontal Earth magnetic field strength for synthesized compass (milliGauss)
+    #[arg(long, default_value_t = 233.0, env = "EARTH_B_HORIZ_MG")]
+    pub earth_b_horiz_mg: f64,
+
+    /// Earth magnetic declination for synthesized compass (degrees east-positive)
+    #[arg(long, default_value_t = 13.0, env = "EARTH_DECLINATION_DEG")]
+    pub earth_declination_deg: f64,
+
+    /// Down component of Earth magnetic field for synthesized compass (milliGauss)
+    #[arg(long, default_value_t = 425.0, env = "EARTH_B_DOWN_MG")]
+    pub earth_b_down_mg: f64,
 }

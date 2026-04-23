@@ -63,6 +63,11 @@ stdenv.mkDerivation rec {
     python3 - <<'PY'
 from pathlib import Path
 
+def replace_once(text: str, needle: str, replacement: str, label: str) -> str:
+    if needle not in text:
+        raise RuntimeError(f"{label}: expected snippet not found")
+    return text.replace(needle, replacement, 1)
+
 cfg = Path("libraries/AP_ExternalAHRS/AP_ExternalAHRS_config.h")
 cfg_text = cfg.read_text()
 cfg_block = """#ifndef AP_EXTERNAL_AHRS_ALEPH_ENABLED
@@ -70,6 +75,8 @@ cfg_block = """#ifndef AP_EXTERNAL_AHRS_ALEPH_ENABLED
 #endif
 """
 if "AP_EXTERNAL_AHRS_ALEPH_ENABLED" not in cfg_text:
+    if "#define AP_EXTERNAL_AHRS_BACKEND_DEFAULT_ENABLED" not in cfg_text:
+        raise RuntimeError("AP_ExternalAHRS_config.h: expected defaults define before Aleph append")
     cfg_text = cfg_text.rstrip() + "\n\n" + cfg_block
 cfg.write_text(cfg_text)
 
@@ -87,71 +94,86 @@ replacement = """#if AP_EXTERNAL_AHRS_SENSAITION_ENABLED
 #endif
 """
 if "Aleph = 12" not in hdr_text:
-    hdr_text = hdr_text.replace(needle, replacement)
+    hdr_text = replace_once(hdr_text, needle, replacement, "AP_ExternalAHRS.h Aleph enum")
 hdr.write_text(hdr_text)
 
 cpp = Path("libraries/AP_ExternalAHRS/AP_ExternalAHRS.cpp")
 cpp_text = cpp.read_text()
 if '#include "AP_ExternalAHRS_Aleph.h"' not in cpp_text:
-    cpp_text = cpp_text.replace(
+    cpp_text = replace_once(
+        cpp_text,
         '#include "AP_ExternalAHRS_SensAItion.h"\n',
-        '#include "AP_ExternalAHRS_SensAItion.h"\n#include "AP_ExternalAHRS_Aleph.h"\n'
+        '#include "AP_ExternalAHRS_SensAItion.h"\n#include "AP_ExternalAHRS_Aleph.h"\n',
+        "AP_ExternalAHRS.cpp include Aleph backend",
     )
-cpp_text = cpp_text.replace(
-    "0:None,1:VectorNav,2:MicroStrain5,5:InertialLabs,6:Trimble GSOF,7:MicroStrain7,8:SBG,11:SensAItion",
-    "0:None,1:VectorNav,2:MicroStrain5,5:InertialLabs,6:Trimble GSOF,7:MicroStrain7,8:SBG,11:SensAItion,12:Aleph"
-)
+if "0:None,1:VectorNav,2:MicroStrain5,5:InertialLabs,6:Trimble GSOF,7:MicroStrain7,8:SBG,11:SensAItion,12:Aleph" not in cpp_text:
+    cpp_text = replace_once(
+        cpp_text,
+        "0:None,1:VectorNav,2:MicroStrain5,5:InertialLabs,6:Trimble GSOF,7:MicroStrain7,8:SBG,11:SensAItion",
+        "0:None,1:VectorNav,2:MicroStrain5,5:InertialLabs,6:Trimble GSOF,7:MicroStrain7,8:SBG,11:SensAItion,12:Aleph",
+        "AP_ExternalAHRS.cpp devtype parameter doc",
+    )
 if "case DevType::Aleph:" not in cpp_text:
-    cpp_text = cpp_text.replace(
+    cpp_text = replace_once(
+        cpp_text,
         "#if AP_EXTERNAL_AHRS_SBG_ENABLED\n    case DevType::SBG:\n        backend = NEW_NOTHROW AP_ExternalAHRS_SBG(this, state);\n        return;\n#endif // AP_EXTERNAL_AHRS_SBG_ENABLED\n",
-        "#if AP_EXTERNAL_AHRS_SBG_ENABLED\n    case DevType::SBG:\n        backend = NEW_NOTHROW AP_ExternalAHRS_SBG(this, state);\n        return;\n#endif // AP_EXTERNAL_AHRS_SBG_ENABLED\n\n#if AP_EXTERNAL_AHRS_ALEPH_ENABLED\n    case DevType::Aleph:\n        backend = NEW_NOTHROW AP_ExternalAHRS_Aleph(this, state);\n        return;\n#endif // AP_EXTERNAL_AHRS_ALEPH_ENABLED\n"
+        "#if AP_EXTERNAL_AHRS_SBG_ENABLED\n    case DevType::SBG:\n        backend = NEW_NOTHROW AP_ExternalAHRS_SBG(this, state);\n        return;\n#endif // AP_EXTERNAL_AHRS_SBG_ENABLED\n\n#if AP_EXTERNAL_AHRS_ALEPH_ENABLED\n    case DevType::Aleph:\n        backend = NEW_NOTHROW AP_ExternalAHRS_Aleph(this, state);\n        return;\n#endif // AP_EXTERNAL_AHRS_ALEPH_ENABLED\n",
+        "AP_ExternalAHRS.cpp Aleph backend switch case",
     )
 cpp.write_text(cpp_text)
 
 # --- Patch INS register_accel to auto-save device ID (like SITL does) ---
 ins = Path("libraries/AP_InertialSensor/AP_InertialSensor.cpp")
 ins_text = ins.read_text()
-ins_text = ins_text.replace(
+accel_old = (
     '#if CONFIG_HAL_BOARD == HAL_BOARD_SITL || (CONFIG_HAL_BOARD == HAL_BOARD_CHIBIOS && AP_SIM_ENABLED)\n'
     '        // assume this is the same sensor and save its ID to allow seamless\n'
     '        // transition from when we didn\'t have the IDs.\n'
     '        _accel_id_ok[_accel_count] = true;\n'
     '        _accel_id(_accel_count).save();\n'
-    '#endif',
+    '#endif'
+)
+accel_new = (
     '#if CONFIG_HAL_BOARD == HAL_BOARD_SITL || (CONFIG_HAL_BOARD == HAL_BOARD_CHIBIOS && AP_SIM_ENABLED) || AP_EXTERNAL_AHRS_ALEPH_ENABLED\n'
     '        // assume this is the same sensor and save its ID to allow seamless\n'
     '        // transition from when we didn\'t have the IDs.\n'
     '        _accel_id_ok[_accel_count] = true;\n'
     '        _accel_id(_accel_count).save();\n'
-    '#endif',
+    '#endif'
 )
+if accel_new not in ins_text:
+    ins_text = replace_once(ins_text, accel_old, accel_new, "AP_InertialSensor.cpp accel id save")
 
 # --- Patch INS register_gyro to auto-save device ID ---
-ins_text = ins_text.replace(
+gyro_old = (
     '#if CONFIG_HAL_BOARD == HAL_BOARD_SITL\n'
     '    if (!saved) {\n'
     '        // assume this is the same sensor and save its ID to allow seamless\n'
     '        // transition from when we didn\'t have the IDs.\n'
     '        _gyro_id(_gyro_count).save();\n'
     '    }\n'
-    '#endif',
+    '#endif'
+)
+gyro_new = (
     '#if CONFIG_HAL_BOARD == HAL_BOARD_SITL || AP_EXTERNAL_AHRS_ALEPH_ENABLED\n'
     '    if (!saved) {\n'
     '        // assume this is the same sensor and save its ID to allow seamless\n'
     '        // transition from when we didn\'t have the IDs.\n'
     '        _gyro_id(_gyro_count).save();\n'
     '    }\n'
-    '#endif',
+    '#endif'
 )
+if gyro_new not in ins_text:
+    ins_text = replace_once(ins_text, gyro_old, gyro_new, "AP_InertialSensor.cpp gyro id save")
 ins.write_text(ins_text)
 
 # --- Patch compass ExternalAHRS to save dev_id on probe ---
 cmps = Path("libraries/AP_Compass/AP_Compass_ExternalAHRS.cpp")
 cmps_text = cmps.read_text()
-cmps_text = cmps_text.replace(
-    'ret->set_external(true);\n    return ret;',
-    'ret->set_external(true);\n    ret->save_dev_id();\n    return ret;',
-)
+cmps_old = 'ret->set_external(true);\n    return ret;'
+cmps_new = 'ret->set_external(true);\n    ret->save_dev_id();\n    return ret;'
+if cmps_new not in cmps_text:
+    cmps_text = replace_once(cmps_text, cmps_old, cmps_new, "AP_Compass_ExternalAHRS.cpp save dev id")
 cmps.write_text(cmps_text)
 PY
   '';
