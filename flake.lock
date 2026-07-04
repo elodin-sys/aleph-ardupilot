@@ -3,26 +3,27 @@
     "aleph": {
       "inputs": {
         "jetpack": "jetpack",
-        "nixpkgs": "nixpkgs",
+        "nixpkgs": [
+          "elodin",
+          "nixpkgs"
+        ],
         "nixpkgs-unstable": "nixpkgs-unstable",
-        "rust-overlay": "rust-overlay"
+        "rust-overlay": [
+          "elodin",
+          "rust-overlay"
+        ]
       },
       "locked": {
-        "dir": "aleph",
-        "lastModified": 1776900385,
-        "narHash": "sha256-76rK5FdPjtb3yAmixTgIhtqzJdmaEwJLfQJxywqhlOI=",
-        "owner": "elodin-sys",
-        "repo": "elodin",
-        "rev": "aea84b785479779bae30a5ea6781768f5cc29aab",
-        "type": "github"
+        "path": "./aleph",
+        "type": "path"
       },
       "original": {
-        "dir": "aleph",
-        "owner": "elodin-sys",
-        "repo": "elodin",
-        "rev": "aea84b785479779bae30a5ea6781768f5cc29aab",
-        "type": "github"
-      }
+        "path": "./aleph",
+        "type": "path"
+      },
+      "parent": [
+        "elodin"
+      ]
     },
     "ardupilot-src": {
       "flake": false,
@@ -46,22 +47,24 @@
     "cuda-legacy": {
       "inputs": {
         "flake-parts": [
+          "elodin",
           "aleph",
           "jetpack",
           "cuda-legacy"
         ],
         "nixpkgs": [
+          "elodin",
           "aleph",
           "jetpack",
           "nixpkgs"
         ]
       },
       "locked": {
-        "lastModified": 1762806692,
-        "narHash": "sha256-JhgQIwJe0U2vxj+pu+Sgm+VLgNqucpXtZYGKZOgkQdc=",
+        "lastModified": 1768505959,
+        "narHash": "sha256-oFCx/ApQ+S1/apUKWsvT9vq+Eo1m2vINWEDkW7/nckA=",
         "owner": "nixos-cuda",
         "repo": "cuda-legacy",
-        "rev": "9856d70acc3e2ae9081930b33d946326e07f1482",
+        "rev": "86ad7e2c2e314f0234539cbbc66b5cd7746bcd32",
         "type": "github"
       },
       "original": {
@@ -72,24 +75,28 @@
     },
     "elodin": {
       "inputs": {
+        "aleph": "aleph",
         "flake-utils": "flake-utils",
-        "nixpkgs": "nixpkgs_2",
-        "rust-overlay": "rust-overlay_2",
+        "nixpkgs": "nixpkgs",
+        "rust-overlay": "rust-overlay",
         "systems": "systems"
       },
       "locked": {
-        "lastModified": 1776900385,
-        "narHash": "sha256-76rK5FdPjtb3yAmixTgIhtqzJdmaEwJLfQJxywqhlOI=",
-        "owner": "elodin-sys",
-        "repo": "elodin",
-        "rev": "aea84b785479779bae30a5ea6781768f5cc29aab",
-        "type": "github"
+        "lastModified": 1782751656,
+        "lfs": true,
+        "narHash": "sha256-fFW6le9YuoAfse6JAuo/NDQRoMWQP+dqn/labfaLZ7o=",
+        "ref": "main",
+        "rev": "7e707975bdaf32aaa6800792cf81be7189dfbd1e",
+        "revCount": 1665,
+        "type": "git",
+        "url": "https://github.com/elodin-sys/elodin.git"
       },
       "original": {
-        "owner": "elodin-sys",
-        "repo": "elodin",
-        "rev": "aea84b785479779bae30a5ea6781768f5cc29aab",
-        "type": "github"
+        "lfs": true,
+        "ref": "main",
+        "rev": "7e707975bdaf32aaa6800792cf81be7189dfbd1e",
+        "type": "git",
+        "url": "https://github.com/elodin-sys/elodin.git"
       }
     },
     "flake-utils": {
@@ -126,56 +133,58 @@
         "type": "github"
       },
       "original": {
-        "id": "flake-utils",
-        "type": "indirect"
+        "owner": "numtide",
+        "repo": "flake-utils",
+        "type": "github"
       }
     },
     "jetpack": {
       "inputs": {
         "cuda-legacy": "cuda-legacy",
         "nixpkgs": [
+          "elodin",
           "aleph",
           "nixpkgs"
         ]
       },
       "locked": {
-        "lastModified": 1768685536,
-        "narHash": "sha256-94sYZ9jRsrBu24ia4pXEyudpQHCjKyy+4cN98bRrRjo=",
+        "lastModified": 1780334549,
+        "narHash": "sha256-SVmtu81BtkU+3+6CQvarnijlwLunY64CVH+e3GsSl8s=",
         "owner": "anduril",
         "repo": "jetpack-nixos",
-        "rev": "2c98c9d6c326d67ae5f4909db61238d31352e18c",
+        "rev": "4a4e93a7b3fbe1915870ec54002c616f01367195",
         "type": "github"
       },
       "original": {
         "owner": "anduril",
         "repo": "jetpack-nixos",
-        "rev": "2c98c9d6c326d67ae5f4909db61238d31352e18c",
+        "rev": "4a4e93a7b3fbe1915870ec54002c616f01367195",
         "type": "github"
       }
     },
     "nixpkgs": {
       "locked": {
-        "lastModified": 1775002709,
-        "narHash": "sha256-d3Yx83vSrN+2z/loBh4mJpyRqr9aAJqlke4TkpFmRJA=",
+        "lastModified": 1782116945,
+        "narHash": "sha256-G3tw/IXmaH6IQ2upZvhuN9sG8CkuX+BLuJDpE8hz0Ds=",
         "owner": "NixOS",
         "repo": "nixpkgs",
-        "rev": "bcd464ccd2a1a7cd09aa2f8d4ffba83b761b1d0e",
+        "rev": "34268251cf5547d39063f2c5ea9a196246f7f3a6",
         "type": "github"
       },
       "original": {
         "owner": "NixOS",
-        "ref": "nixos-25.11",
+        "ref": "nixos-26.05",
         "repo": "nixpkgs",
         "type": "github"
       }
     },
     "nixpkgs-unstable": {
       "locked": {
-        "lastModified": 1774709303,
-        "narHash": "sha256-D3Q07BbIA2KnTcSXIqqu9P586uWxN74zNoCH3h2ESHg=",
+        "lastModified": 1781577229,
+        "narHash": "sha256-lrp67w8AulE9Ks53n27I45ADSzbOCn4H+CNW1Ck8B+8=",
         "owner": "nixos",
         "repo": "nixpkgs",
-        "rev": "8110df5ad7abf5d4c0f6fb0f8f978390e77f9685",
+        "rev": "567a49d1913ce81ac6e9582e3553dd90a955875f",
         "type": "github"
       },
       "original": {
@@ -185,25 +194,12 @@
         "type": "github"
       }
     },
-    "nixpkgs_2": {
-      "locked": {
-        "lastModified": 1775002709,
-        "narHash": "sha256-d3Yx83vSrN+2z/loBh4mJpyRqr9aAJqlke4TkpFmRJA=",
-        "owner": "NixOS",
-        "repo": "nixpkgs",
-        "rev": "bcd464ccd2a1a7cd09aa2f8d4ffba83b761b1d0e",
-        "type": "github"
-      },
-      "original": {
-        "owner": "NixOS",
-        "ref": "nixos-25.11",
-        "repo": "nixpkgs",
-        "type": "github"
-      }
-    },
     "root": {
       "inputs": {
-        "aleph": "aleph",
+        "aleph": [
+          "elodin",
+          "aleph"
+        ],
         "ardupilot-src": "ardupilot-src",
         "elodin": "elodin",
         "flake-utils": "flake-utils_2",
@@ -216,42 +212,22 @@
     "rust-overlay": {
       "inputs": {
         "nixpkgs": [
-          "aleph",
-          "nixpkgs"
-        ]
-      },
-      "locked": {
-        "lastModified": 1775013181,
-        "narHash": "sha256-zPrt6oNM1r/RO5bWYaZ3hthfG9vzkr6kQdoqDd5x4Qw=",
-        "owner": "oxalica",
-        "repo": "rust-overlay",
-        "rev": "e8046c1d9ccadd497c2344d8fa49dab62f22f7be",
-        "type": "github"
-      },
-      "original": {
-        "owner": "oxalica",
-        "repo": "rust-overlay",
-        "type": "github"
-      }
-    },
-    "rust-overlay_2": {
-      "inputs": {
-        "nixpkgs": [
           "elodin",
           "nixpkgs"
         ]
       },
       "locked": {
-        "lastModified": 1775013181,
-        "narHash": "sha256-zPrt6oNM1r/RO5bWYaZ3hthfG9vzkr6kQdoqDd5x4Qw=",
+        "lastModified": 1782357464,
+        "narHash": "sha256-mXgoT1qDHCdSfF9IvhMtEEFNy9dxrmUfSViwP7RpzOQ=",
         "owner": "oxalica",
         "repo": "rust-overlay",
-        "rev": "e8046c1d9ccadd497c2344d8fa49dab62f22f7be",
+        "rev": "77a8263847fb02dc49dbe377278ef6b952f1c6bb",
         "type": "github"
       },
       "original": {
         "owner": "oxalica",
         "repo": "rust-overlay",
+        "rev": "77a8263847fb02dc49dbe377278ef6b952f1c6bb",
         "type": "github"
       }
     },
