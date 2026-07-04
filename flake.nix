@@ -20,9 +20,12 @@
   };
 
   inputs = {
-    aleph.url = "github:elodin-sys/elodin?rev=aea84b785479779bae30a5ea6781768f5cc29aab&dir=aleph";
-    elodin.url = "github:elodin-sys/elodin?rev=aea84b785479779bae30a5ea6781768f5cc29aab";
+    aleph.follows = "elodin/aleph";
+    # Elodin - can be overridden to test development branches, e.g.:
+    #   --override-input elodin "git+https://github.com/elodin-sys/elodin.git?ref=fix/branch-name&lfs=1"
+    elodin.url = "git+https://github.com/elodin-sys/elodin.git?ref=main&rev=7e707975bdaf32aaa6800792cf81be7189dfbd1e&lfs=1";
     nixpkgs.follows = "aleph/nixpkgs";
+    flake-utils.url = "github:numtide/flake-utils";
 
     ardupilot-src = {
       type = "git";
@@ -137,6 +140,11 @@
 
       system.stateVersion = "25.11";
       i18n.supportedLocales = [(config.i18n.defaultLocale + "/UTF-8")];
+
+      # Don't link package HTML docs (/share/doc) into the system. CPython
+      # 3.12's docs fail to build under nixpkgs 26.05 (Sphinx vs docutils 0.22),
+      # and on-device HTML docs aren't needed. Man pages are unaffected.
+      documentation.doc.enable = false;
 
       services.nvpmodel = {
         enable = true;
