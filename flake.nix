@@ -13,17 +13,18 @@
 #
 {
   nixConfig = {
-    extra-substituters = ["https://elodin-nix-cache.s3.us-west-2.amazonaws.com"];
+    extra-substituters = ["https://s3-us-west-2.amazonaws.com/elodin-nix-cache"];
     extra-trusted-public-keys = [
       "elodin-cache-1:vvbmIQvTOjcBjIs8Ri7xlT2I3XAmeJyF5mNlWB+fIwM="
     ];
+    fallback = true;
   };
 
   inputs = {
     aleph.follows = "elodin/aleph";
     # Elodin - can be overridden to test development branches, e.g.:
     #   --override-input elodin "git+https://github.com/elodin-sys/elodin.git?ref=fix/branch-name&lfs=1"
-    elodin.url = "git+https://github.com/elodin-sys/elodin.git?ref=main&rev=7e707975bdaf32aaa6800792cf81be7189dfbd1e&lfs=1";
+    elodin.url = "git+https://github.com/elodin-sys/elodin.git?ref=main&lfs=1";
     nixpkgs.follows = "aleph/nixpkgs";
     flake-utils.url = "github:numtide/flake-utils";
 
@@ -146,6 +147,9 @@
       # and on-device HTML docs aren't needed. Man pages are unaffected.
       documentation.doc.enable = false;
 
+      # NVIDIA's Tegra udev rules assign GPU/debug nodes to this group.
+      users.groups.debug = {};
+
       services.nvpmodel = {
         enable = true;
         profileNumber = 0;
@@ -157,14 +161,18 @@
       '';
 
       # Uncomment ONE line to enable GPS-disciplined timestamping:
-      services.sensor-fw.gps.model = "m10q";   # SAM-M10Q (9600 baud)
-      # services.sensor-fw.gps.model = "m9n";    # NEO-M9N / M9N-5883 (38400 baud)
+      # services.sensor-fw.gps.model = "m10q";   # SAM-M10Q (9600 baud)
+      services.sensor-fw.gps.model = "m9n";    # NEO-M9N / M9N-5883 (38400 baud)
 
       services.arducopter = {
         enable = true;
         clearEeprom = false;
         defaultsFile = ./src/ardupilot-defaults.param;
-        extraFlags = [ "--serial0" "udp:192.168.4.64:14550" ];
+        # MAVLink out to the ground station (QGroundControl). This must be the
+        # GCS/laptop IP, NOT the Aleph's own IP. QGC auto-listens on UDP 14550.
+        # (Use the subnet broadcast, e.g. udp:192.168.7.255:14550, to avoid
+        # hardcoding the laptop IP if it changes via DHCP.)
+        extraFlags = [ "--serial0" "udp:192.168.4.40:14550" ];
       };
 
       environment.systemPackages = with pkgs; [

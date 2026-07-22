@@ -82,19 +82,18 @@
         "systems": "systems"
       },
       "locked": {
-        "lastModified": 1782751656,
+        "lastModified": 1784574848,
         "lfs": true,
-        "narHash": "sha256-fFW6le9YuoAfse6JAuo/NDQRoMWQP+dqn/labfaLZ7o=",
+        "narHash": "sha256-Mh672Dtyn0x6fXPdzFQYZAPu4zgB1q/kvQeDR1gGQIU=",
         "ref": "main",
-        "rev": "7e707975bdaf32aaa6800792cf81be7189dfbd1e",
-        "revCount": 1665,
+        "rev": "600e149fcdca2bae77c921ba0b200b25578c0905",
+        "revCount": 1678,
         "type": "git",
         "url": "https://github.com/elodin-sys/elodin.git"
       },
       "original": {
         "lfs": true,
         "ref": "main",
-        "rev": "7e707975bdaf32aaa6800792cf81be7189dfbd1e",
         "type": "git",
         "url": "https://github.com/elodin-sys/elodin.git"
       }
