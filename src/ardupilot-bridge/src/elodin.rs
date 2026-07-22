@@ -15,10 +15,13 @@ use zerocopy::{Immutable, IntoBytes, KnownLayout, TryFromBytes};
 /// IMU sensor data from the on-board BMI270/BMM350 (~1500 Hz).
 #[derive(AsVTable, Default, Debug, Clone, TryFromBytes, Immutable, KnownLayout)]
 #[db(parent = "imu")]
+#[repr(C, packed)]
 pub struct SensorInput {
-    pub mag: [f32; 3],
-    pub gyro: [f32; 3],
+    #[db(timestamp)]
+    pub time: i64,
     pub accel: [f32; 3],
+    pub gyro: [f32; 3],
+    pub mag: [f32; 3],
 }
 
 /// GPS data from the Mateksys M10Q-5883 or NEO-M9N u-blox receiver.
@@ -29,21 +32,23 @@ pub struct SensorInput {
 #[db(parent = "ublox")]
 #[repr(C, packed)]
 pub struct GPSInput {
+    #[db(timestamp)]
+    pub time: i64,
+    pub unix_epoch_ms: i64,    // Unix epoch (ms)
+    pub itow: u32,             // GPS time of week (ms)
     pub lat: i32,              // 1e-7 degrees
     pub lon: i32,              // 1e-7 degrees
     pub alt_msl: i32,          // mm above mean sea level
     pub alt_wgs84: i32,        // mm above WGS84 ellipsoid
     pub vel_ned: [i32; 3],     // mm/s [North, East, Down]
-    pub fix_type: u8,          // 0=none, 2=2D, 3=3D
-    pub satellites: u8,
+    pub ground_speed: u32,     // mm/s
+    pub heading_motion: i32,   // 1e-5 degrees
     pub h_acc: u32,            // horizontal accuracy (mm)
     pub v_acc: u32,            // vertical accuracy (mm)
     pub s_acc: u32,            // speed accuracy (mm/s)
-    pub ground_speed: u32,     // mm/s
-    pub heading_motion: i32,   // 1e-5 degrees
+    pub fix_type: u8,          // 0=none, 2=2D, 3=3D
+    pub satellites: u8,
     pub valid_flags: u8,
-    pub itow: u32,             // GPS time of week (ms)
-    pub unix_epoch_ms: i64,    // Unix epoch (ms)
 }
 
 /// External compass data from the QMC5883L on the Mateksys M10Q-5883 module.
@@ -53,6 +58,8 @@ pub struct GPSInput {
 #[db(parent = "qmc5883l")]
 #[repr(C, packed)]
 pub struct QMC5883LInput {
+    #[db(timestamp)]
+    pub time: i64,
     pub mag: [i16; 3],         // raw magnetometer LSB (12000 LSB/Gauss at ±2G range)
     pub status: u8,
 }
@@ -69,8 +76,15 @@ pub struct MekfInput {
 #[db(parent = "aleph")]
 #[repr(C, packed)]
 pub struct AlephBaroInput {
-    pub baro: f32,      // pressure in Pascals
-    pub baro_temp: f32, // temperature in Celsius
+    #[db(timestamp)]
+    pub time: i64,
+    pub baro: f32,        // pressure in Pascals
+    pub baro_temp: f32,   // temperature in Celsius
+    pub vin: f32,
+    pub vbat: f32,
+    pub aux_current: f32,
+    pub rtc_vbat: f32,
+    pub cpu_temp: f32,
 }
 
 /// Motor command telemetry written back to Elodin-DB.

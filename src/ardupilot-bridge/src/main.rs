@@ -279,6 +279,7 @@ async fn bridge_loop(
     let mut roundtrip_total_us: u64 = 0;
     let mut roundtrip_count: u64 = 0;
     let mut last_sensor_send_at: Option<std::time::Instant> = None;
+    let mut last_motor_telemetry_time_us: i64 = 0;
 
     loop {
         loop_iters += 1;
@@ -323,6 +324,9 @@ async fn bridge_loop(
                         local_now_us
                     }
                 };
+                let telemetry_time_us =
+                    telemetry_time_us.max(last_motor_telemetry_time_us.saturating_add(1));
+                last_motor_telemetry_time_us = telemetry_time_us;
 
                 let telemetry = MotorTelemetry::new(motor_pwm, motor_cmd, telemetry_time_us);
                 let table = telemetry.to_table_packet(telemetry_id);

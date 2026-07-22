@@ -1,6 +1,7 @@
 result
 target
 dbs/*
+screenlog*
 .DS_Store
 context/
 __pycache__/
