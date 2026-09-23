@@ -161,8 +161,8 @@
       '';
 
       # Uncomment ONE line to enable GPS-disciplined timestamping:
-      # services.sensor-fw.gps.model = "m10q";   # SAM-M10Q (9600 baud)
-      services.sensor-fw.gps.model = "m9n";    # NEO-M9N / M9N-5883 (38400 baud)
+      services.sensor-fw.gps.model = "m10q";   # SAM-M10Q (9600 baud)
+      #services.sensor-fw.gps.model = "m9n";    # NEO-M9N / M9N-5883 (38400 baud)
 
       services.arducopter = {
         enable = true;
@@ -172,7 +172,7 @@
         # GCS/laptop IP, NOT the Aleph's own IP. QGC auto-listens on UDP 14550.
         # (Use the subnet broadcast, e.g. udp:192.168.7.255:14550, to avoid
         # hardcoding the laptop IP if it changes via DHCP.)
-        extraFlags = [ "--serial0" "udp:192.168.4.40:14550" ];
+        extraFlags = [ "--serial0" "udp:192.168.4.134:14550" ];
       };
 
       environment.systemPackages = with pkgs; [
@@ -232,7 +232,7 @@
       # Bridge points at the laptop's Elodin-DB.
       services.ardupilot-bridge = {
         enable = true;
-        elodinAddr = "192.168.4.64:2240";
+        elodinAddr = "192.168.4.134:2240";
       };
     };
 

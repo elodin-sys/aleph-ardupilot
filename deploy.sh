@@ -17,6 +17,20 @@ log_info() { gum log --level info "$*"; }
 log_warn() { gum log --level warn "$*"; }
 log_error() { gum log --level error "$*"; }
 
+# nix/nom may emit unrelated text on stdout (e.g. Determinate Nix <3.18 leaked
+# "Initialized empty Git repository ..." from its git fetcher). Keep only the
+# final /nix/store/... line.
+extract_out_path() {
+  local path
+  path="$(printf '%s\n' "$1" | grep -E '^/nix/store/[^[:space:]]+$' | tail -n 1)"
+  if [ -z "$path" ]; then
+    log_error "Could not find a /nix/store path in build output:"
+    printf '%s\n' "$1" >&2
+    exit 1
+  fi
+  printf '%s' "$path"
+}
+
 show_usage() {
   echo "Usage: $0 [options]"
   echo
@@ -99,11 +113,13 @@ if [ "$no_aleph_builder" = false ] && ! ( ([ "$(uname -m)" = "aarch64" ] && [ "$
   log_warn "No aarch64-linux builder found, falling back to building on Aleph (slow)"
   build_cmd=(nom build --accept-flake-config --eval-store auto --store "$store_url" "$target" --print-out-paths)
   log_info "Running: ${build_cmd[*]}"
-  out_path="$("${build_cmd[@]}")"
+  build_output="$("${build_cmd[@]}")"
+  out_path="$(extract_out_path "$build_output")"
 else
   build_cmd=(nom build --accept-flake-config "$target" --print-out-paths)
   log_info "Running: ${build_cmd[*]}"
-  out_path="$("${build_cmd[@]}")"
+  build_output="$("${build_cmd[@]}")"
+  out_path="$(extract_out_path "$build_output")"
   copy_cmd=(nix copy --no-check-sigs --to "$store_url" "$out_path")
   log_info "Running: ${copy_cmd[*]}"
   "${copy_cmd[@]}"

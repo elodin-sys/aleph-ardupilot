@@ -82,12 +82,12 @@
         "systems": "systems"
       },
       "locked": {
-        "lastModified": 1784574848,
+        "lastModified": 1790140694,
         "lfs": true,
-        "narHash": "sha256-Mh672Dtyn0x6fXPdzFQYZAPu4zgB1q/kvQeDR1gGQIU=",
+        "narHash": "sha256-uS3PTAkTqV/c4pDVMU3uDPS+bsmE/Z8KqQCapyLyiUQ=",
         "ref": "main",
-        "rev": "600e149fcdca2bae77c921ba0b200b25578c0905",
-        "revCount": 1678,
+        "rev": "045ec75d7d5ce8a9dc27c2e63747dce30c0a0149",
+        "revCount": 1765,
         "type": "git",
         "url": "https://github.com/elodin-sys/elodin.git"
       },
@@ -216,17 +216,17 @@
         ]
       },
       "locked": {
-        "lastModified": 1782357464,
-        "narHash": "sha256-mXgoT1qDHCdSfF9IvhMtEEFNy9dxrmUfSViwP7RpzOQ=",
+        "lastModified": 1787246814,
+        "narHash": "sha256-pEd4/iPY3Zm/EhhHmeB1QnIWXJSLx7gJzD/05mm2MCo=",
         "owner": "oxalica",
         "repo": "rust-overlay",
-        "rev": "77a8263847fb02dc49dbe377278ef6b952f1c6bb",
+        "rev": "c84e121aaede7ef8c7bd9fb5154ccc1599e07816",
         "type": "github"
       },
       "original": {
         "owner": "oxalica",
         "repo": "rust-overlay",
-        "rev": "77a8263847fb02dc49dbe377278ef6b952f1c6bb",
+        "rev": "c84e121aaede7ef8c7bd9fb5154ccc1599e07816",
         "type": "github"
       }
     },
